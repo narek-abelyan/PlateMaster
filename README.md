@@ -1,6 +1,12 @@
 # 🧫 PlateMaster
 
+<p align="center">
+  <a href="#-english-version">🇬🇧 English</a> •
+  <a href="#-русская-версия">🇷🇺 Русский</a>
+</p>
+
 ## 🇬🇧 English version
+
 **PlateMaster** is an interactive **Streamlit** application for analyzing multi-well plate and plate-reader data stored in Excel files. It helps you load one workbook, multiple workbooks, or a ZIP archive, select plate rows and columns, aggregate measurements, remove outliers, compare groups statistically, visualize time-course results, and export a complete Excel report.
 
 **PlateMaster** — это интерактивное приложение на **Streamlit** для анализа данных многолуночных планшетов и Excel-файлов с результатами plate-reader экспериментов. Оно помогает быстро загружать один файл, набор файлов или ZIP-архив, выбирать строки и столбцы планшета, объединять измерения, удалять выбросы, сравнивать группы статистически, строить графики временных рядов и выгружать готовый Excel-отчёт.
@@ -319,95 +325,6 @@ A1, A2, B1, B2
 
 PlateMaster использует Welch-style two-sample t-test для сравнения групп. P-values являются приблизительными и подходят для exploratory analysis; для публикационных выводов рекомендуется отдельная статистическая проверка.
 
----
-
-## 🎨 Визуализация
-
-| Цель | Рекомендуемый график |
-| --- | --- |
-| Проследить динамику во времени | Line + points |
-| Сравнить столбцы внутри time point | Bar plot by time |
-| Сравнить time points внутри столбца | Bar plot by columns |
-| Показать форму распределения | Violin plot |
-| Показать разброс и min/max | Box plot |
-| Посмотреть отдельные агрегированные точки | Scatter plot |
-
----
-
-## 📤 Excel-отчёт
-
-Кнопка экспорта создаёт файл **`plate_master_report.xlsx`** с несколькими листами:
-
-| Лист | Содержимое |
-| --- | --- |
-| Aggregated table | итоговая агрегированная таблица по всем файлам |
-| Statistical analysis | descriptive statistics |
-| T-test analysis | Welch t-test между выбранными группами |
-| Pairwise T-test p-values | матрица попарных p-values |
-| Outlier log | удалённые значения с файлом, временем, строкой, столбцом и значением |
-| Outlier statistics | количество и процент удалённых значений |
-| Plot data | данные, использованные для графика |
-
----
-
-## 🗂 Структура проекта
-
-```text
-PlateMaster1.2.py   # Main Streamlit application and analysis logic
-requirements.txt    # Python dependencies
-README.md           # Russian and English documentation
-```
-
-Приложение сейчас находится в одном Python-файле, что упрощает запуск, перенос и деплой.
-
----
-
-## 🛠 Решение проблем
-
-### Streamlit не установлен
-
-```bash
-pip install streamlit
-streamlit run PlateMaster1.2.py
-```
-
-### Excel-файл не читается
-
-Попробуйте:
-
-1. Установить дополнительные reader-пакеты:
-
-   ```bash
-   pip install openpyxl xlrd python-calamine
-   ```
-
-2. Для старых `.xls` установить LibreOffice.
-3. Открыть файл вручную и сохранить как `.xlsx`.
-4. Проверить, что первый столбец содержит идентификаторы, а остальные — числовые значения.
-
-### No numeric columns detected
-
-Проверьте, что числовые ячейки не содержат лишний текст, символы или нестандартное форматирование.
-
-### Нет time values
-
-Убедитесь, что имена файлов содержат число:
-
-```text
-experiment_0.xlsx
-experiment_10.xlsx
-experiment_20.xlsx
-```
-
-### График не появляется
-
-Проверьте, что:
-
-- нажата кнопка **Run**;
-- выбран хотя бы один plot column;
-- выбранные столбцы есть в aggregated result;
-- для time-based plots имена файлов содержат извлекаемое время.
-
 > The current main application file is **`PlateMaster1.2.py`**.
 
 ---
@@ -427,8 +344,6 @@ experiment_20.xlsx
 - [🗂 Project structure](#-project-structure)
 - [🛠 Troubleshooting](#-troubleshooting)
 - [⚠️ Notes and limitations](#️-notes-and-limitations)
-- [🇷🇺 Русская версия](#-русская-версия)
-
 ---
 
 ## ✨ Key features
@@ -865,8 +780,6 @@ If you use PlateMaster in your work, consider citing or linking to the repositor
 - [🗂 Структура проекта](#-структура-проекта)
 - [🛠 Решение проблем](#-решение-проблем)
 - [⚠️ Ограничения](#️-ограничения)
-- [🇬🇧 English version](#-english-version)
-
 ---
 
 ## ✨ Возможности
@@ -1260,7 +1173,7 @@ experiment_20.xlsx
 
 ---
 
-## 📝 License
+## 📝 Лицензия
 
 Этот проект распространяется под лицензией **MIT License**. Полный текст лицензии находится в файле [`LICENSE`](LICENSE).
 
