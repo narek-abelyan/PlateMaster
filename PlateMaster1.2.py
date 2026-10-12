@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from io import BytesIO, StringIO
 from pathlib import Path
 from typing import Callable
@@ -17,6 +18,13 @@ import numpy as np
 import streamlit as st
 import altair as alt
 import matplotlib.pyplot as plt
+from scipy import stats as scipy_stats
+
+from analysis_settings import (
+    APP_VERSION, DEFAULT_SETTINGS, ENUMS, LAYOUTS, PLOT_TYPES, dumps_config,
+    input_record, loads_config, make_config, metric_names, provenance_sheets,
+    replay_warnings, software_record, validate_config,
+)
 
 try:
     from streamlit.runtime.scriptrunner import get_script_run_ctx
@@ -247,6 +255,26 @@ def _remove_outliers(series: pd.Series, method: str, strictness: float) -> pd.Se
 
     return s
 
+def _finite_observations(values) -> pd.Series:
+    """Use available numeric observations; reject infinities rather than reporting invalid tests."""
+    series = pd.to_numeric(pd.Series(values, dtype="object"), errors="coerce").dropna().astype(float)
+    if not np.isfinite(series).all():
+        raise ValueError("Statistical inputs must not contain infinite values")
+    return series
+
+
+def _dispersion_metrics(values) -> dict[str, float]:
+    """Sample SD, SEM and Student-t 95% CI half-width for the arithmetic mean."""
+    series = _finite_observations(values)
+    n = len(series)
+    sd = float(series.std(ddof=1)) if n > 1 else float("nan")
+    sem = sd / math.sqrt(n) if n > 1 else float("nan")
+    ci95 = float(scipy_stats.t.ppf(0.975, n - 1) * sem) if n > 1 else float("nan")
+    return {"std": sd, "sem": sem, "ci95": ci95,
+            "iqr_half": float((series.quantile(0.75) - series.quantile(0.25)) / 2.0),
+            "mad": float((series - series.median()).abs().median())}
+
+
 def aggregate_rows(
     table: pd.DataFrame,
     selected_rows: list[str],
@@ -282,21 +310,7 @@ def aggregate_rows(
         values[column] = func(cleaned_series)
         source_values[column] = [float(x) for x in cleaned_series.tolist()]
 
-        n = float(len(cleaned_series))
-        std = float(cleaned_series.std(ddof=1)) if n > 1 else 0.0
-        sem = float(std / math.sqrt(n)) if n > 1 else 0.0
-        ci95 = float(1.96 * sem)
-        q1 = float(cleaned_series.quantile(0.25))
-        q3 = float(cleaned_series.quantile(0.75))
-        iqr_half = float((q3 - q1) / 2.0)
-        mad = float((cleaned_series - cleaned_series.median()).abs().median())
-        column_stats[column] = {
-            "std": std,
-            "sem": sem,
-            "ci95": ci95,
-            "iqr_half": iqr_half,
-            "mad": mad,
-        }
+        column_stats[column] = _dispersion_metrics(cleaned_series)
 
     if not values:
         raise ValueError("No values for selected columns")
@@ -306,59 +320,6 @@ def aggregate_rows(
 
 
 
-
-
-def no_aggregate_rows(
-    table: pd.DataFrame,
-    selected_rows: list[str],
-    selected_columns: list[str],
-    outlier_method: str = "None",
-    outlier_strictness: float = 1.5,
-) -> tuple[pd.DataFrame, list[dict[str, float | str]], dict[str, dict[str, float]], dict[str, list[float]]]:
-    filtered = table[table["row_id"].isin(selected_rows)]
-    if filtered.empty:
-        raise ValueError("Selected rows not found in table")
-
-    removed_rows: list[dict[str, float | str]] = []
-    values: dict[str, float] = {}
-    column_stats: dict[str, dict[str, float]] = {}
-    source_values: dict[str, list[float]] = {}
-
-    for column in selected_columns:
-        if column not in filtered.columns:
-            continue
-        original_series = pd.to_numeric(filtered[column], errors="coerce").dropna()
-        cleaned_series = _remove_outliers(original_series, outlier_method, outlier_strictness)
-
-        removed_indices = original_series.index.difference(cleaned_series.index)
-        for idx in removed_indices:
-            removed_rows.append({
-                "row_id": str(filtered.loc[idx, "row_id"]),
-                "column": str(column),
-                "value": float(original_series.loc[idx]),
-            })
-
-        if cleaned_series.empty:
-            continue
-
-        for i, val in enumerate(cleaned_series.tolist(), start=1):
-            values[f"{column}__{i}"] = float(val)
-
-        source_values[column] = [float(x) for x in cleaned_series.tolist()]
-        n = float(len(cleaned_series))
-        std = float(cleaned_series.std(ddof=1)) if n > 1 else 0.0
-        sem = float(std / math.sqrt(n)) if n > 1 else 0.0
-        ci95 = float(1.96 * sem)
-        q1 = float(cleaned_series.quantile(0.25))
-        q3 = float(cleaned_series.quantile(0.75))
-        iqr_half = float((q3 - q1) / 2.0)
-        mad = float((cleaned_series - cleaned_series.median()).abs().median())
-        column_stats[column] = {"std": std, "sem": sem, "ci95": ci95, "iqr_half": iqr_half, "mad": mad}
-
-    if not values:
-        raise ValueError("No values for selected columns")
-
-    return pd.DataFrame([values], index=["aggregated"]), removed_rows, column_stats, source_values
 
 
 def aggregate_by_groups(
@@ -399,15 +360,7 @@ def aggregate_by_groups(
 
         values[group_name] = func(cleaned_series)
         source_values[group_name] = [float(x) for x in cleaned_series.tolist()]
-        n = float(len(cleaned_series))
-        std = float(cleaned_series.std(ddof=1)) if n > 1 else 0.0
-        sem = float(std / math.sqrt(n)) if n > 1 else 0.0
-        ci95 = float(1.96 * sem)
-        q1 = float(cleaned_series.quantile(0.25))
-        q3 = float(cleaned_series.quantile(0.75))
-        iqr_half = float((q3 - q1) / 2.0)
-        mad = float((cleaned_series - cleaned_series.median()).abs().median())
-        group_stats[group_name] = {"std": std, "sem": sem, "ci95": ci95, "iqr_half": iqr_half, "mad": mad}
+        group_stats[group_name] = _dispersion_metrics(cleaned_series)
 
     if not values:
         raise ValueError("No values for selected groups")
@@ -448,15 +401,7 @@ def aggregate_columns_by_row(
 
         values[row_id] = func(cleaned_series)
         source_values[row_id] = [float(x) for x in cleaned_series.tolist()]
-        n = float(len(cleaned_series))
-        std = float(cleaned_series.std(ddof=1)) if n > 1 else 0.0
-        sem = float(std / math.sqrt(n)) if n > 1 else 0.0
-        ci95 = float(1.96 * sem)
-        q1 = float(cleaned_series.quantile(0.25))
-        q3 = float(cleaned_series.quantile(0.75))
-        iqr_half = float((q3 - q1) / 2.0)
-        mad = float((cleaned_series - cleaned_series.median()).abs().median())
-        row_stats[row_id] = {"std": std, "sem": sem, "ci95": ci95, "iqr_half": iqr_half, "mad": mad}
+        row_stats[row_id] = _dispersion_metrics(cleaned_series)
 
     if not values:
         raise ValueError("No values for selected rows")
@@ -465,100 +410,69 @@ def aggregate_columns_by_row(
 
 
 def _basic_stat_metrics(values: list[float]) -> pd.DataFrame:
-    if not values:
+    """Describe available observations and test their mean against zero using Student's t."""
+    series = _finite_observations(values)
+    if series.empty:
         return pd.DataFrame([{"Metric": "No data", "Value": "N/A"}])
-
-    s = pd.Series(values, dtype=float)
-    n = len(s)
-    mean = float(s.mean())
-    median = float(s.median())
-    mode_vals = s.mode()
-    mode = float(mode_vals.iloc[0]) if not mode_vals.empty else float("nan")
-    sd = float(s.std(ddof=1)) if n > 1 else 0.0
-    sem = float(sd / math.sqrt(n)) if n > 1 else 0.0
-    mad = float((s - s.median()).abs().median())
-    min_v = float(s.min())
-    max_v = float(s.max())
-    ci95 = float(1.96 * sem)
-    iqr_half = float((s.quantile(0.75) - s.quantile(0.25)) / 2.0)
-
-    # Approximate two-sided p-value for mean != 0 using normal approximation.
-    if n > 1 and sem > 0:
-        z = abs(mean / sem)
-        p_value = float(math.erfc(z / math.sqrt(2.0)))
-    else:
-        p_value = float("nan")
-
+    n = len(series)
+    mean = float(series.mean())
+    spread = _dispersion_metrics(series)
+    mode_vals = series.mode()
+    p_value = float("nan")
+    status = "Need at least 2 observations" if n < 2 else "Undefined (zero sample variance)"
+    if n > 1 and spread["std"] > 0:
+        p_value = float(scipy_stats.ttest_1samp(series.to_numpy(), popmean=0.0).pvalue)
+        status = "Two-sided Student t-test; null mean = 0"
     rows = [
         {"Metric": "n", "Value": n},
         {"Metric": "mean", "Value": mean},
-        {"Metric": "median", "Value": median},
-        {"Metric": "mode", "Value": mode},
-        {"Metric": "sd", "Value": sd},
-        {"Metric": "sem", "Value": sem},
-        {"Metric": "mad", "Value": mad},
-        {"Metric": "min", "Value": min_v},
-        {"Metric": "max", "Value": max_v},
-        {"Metric": "95CI", "Value": ci95},
-        {"Metric": "IQR/2", "Value": iqr_half},
-        {"Metric": "p-value (mean != 0, approx)", "Value": p_value},
+        {"Metric": "median", "Value": float(series.median())},
+        {"Metric": "mode", "Value": float(mode_vals.iloc[0]) if not mode_vals.empty else float("nan")},
+        {"Metric": "sd", "Value": spread["std"]},
+        {"Metric": "sem", "Value": spread["sem"]},
+        {"Metric": "mad", "Value": spread["mad"]},
+        {"Metric": "min", "Value": float(series.min())},
+        {"Metric": "max", "Value": float(series.max())},
+        {"Metric": "95% CI half-width (mean, Student t)", "Value": spread["ci95"]},
+        {"Metric": "95% CI lower (mean)", "Value": mean - spread["ci95"]},
+        {"Metric": "95% CI upper (mean)", "Value": mean + spread["ci95"]},
+        {"Metric": "IQR/2", "Value": spread["iqr_half"]},
+        {"Metric": "p-value (mean != 0, Student t)", "Value": p_value},
+        {"Metric": "One-sample test status", "Value": status},
     ]
     return pd.DataFrame(rows)
 
 
+def _welch_result(values_a, values_b) -> dict:
+    """One validated calculation shared by the two-group table and pairwise matrix."""
+    a, b = _finite_observations(values_a), _finite_observations(values_b)
+    result = {"n_a": len(a), "n_b": len(b), "mean_a": float(a.mean()), "mean_b": float(b.mean()),
+              "t": float("nan"), "df": float("nan"), "p": float("nan"), "status": "OK"}
+    if len(a) < 2 or len(b) < 2:
+        result["status"] = "Need at least 2 observations in each group"
+    elif a.var(ddof=1) == 0 and b.var(ddof=1) == 0:
+        result["status"] = "Undefined (both groups have zero sample variance)"
+    else:
+        test = scipy_stats.ttest_ind(a.to_numpy(), b.to_numpy(), equal_var=False)
+        result.update(t=float(test.statistic), df=float(test.df), p=float(test.pvalue))
+    return result
+
+
 def _welch_t_test(values_a: list[float], values_b: list[float]) -> pd.DataFrame:
-    if len(values_a) < 2 or len(values_b) < 2:
-        return pd.DataFrame(
-            [{"Metric": "T-test", "Value": "Need at least 2 values in each group"}]
-        )
-
-    a = pd.Series(values_a, dtype=float)
-    b = pd.Series(values_b, dtype=float)
-    n1 = float(len(a))
-    n2 = float(len(b))
-    m1 = float(a.mean())
-    m2 = float(b.mean())
-    v1 = float(a.var(ddof=1))
-    v2 = float(b.var(ddof=1))
-    se = math.sqrt((v1 / n1) + (v2 / n2))
-    if se == 0:
-        return pd.DataFrame([{"Metric": "T-test", "Value": "Undefined (zero variance)"}])
-
-    t_stat = (m1 - m2) / se
-    num = (v1 / n1 + v2 / n2) ** 2
-    den = ((v1 / n1) ** 2 / (n1 - 1.0)) + ((v2 / n2) ** 2 / (n2 - 1.0))
-    dof = num / den if den > 0 else float("nan")
-    p_approx = float(math.erfc(abs(t_stat) / math.sqrt(2.0)))
-
-    return pd.DataFrame(
-        [
-            {"Metric": "Group A n", "Value": int(n1)},
-            {"Metric": "Group B n", "Value": int(n2)},
-            {"Metric": "Group A mean", "Value": m1},
-            {"Metric": "Group B mean", "Value": m2},
-            {"Metric": "Welch t", "Value": float(t_stat)},
-            {"Metric": "df (Welch)", "Value": float(dof)},
-            {"Metric": "p-value (2-sided, approx)", "Value": p_approx},
-        ]
-    )
+    """Return Welch's unequal-variance t-test, including its degrees of freedom."""
+    r = _welch_result(values_a, values_b)
+    return pd.DataFrame([
+        {"Metric": "Group A n", "Value": r["n_a"]}, {"Metric": "Group B n", "Value": r["n_b"]},
+        {"Metric": "Group A mean", "Value": r["mean_a"]}, {"Metric": "Group B mean", "Value": r["mean_b"]},
+        {"Metric": "Welch t", "Value": r["t"]}, {"Metric": "df (Welch)", "Value": r["df"]},
+        {"Metric": "p-value (2-sided, Welch t)", "Value": r["p"]},
+        {"Metric": "Test status", "Value": r["status"]},
+    ])
 
 
 def _welch_p_value(values_a: list[float], values_b: list[float]) -> float:
-    if len(values_a) < 2 or len(values_b) < 2:
-        return float("nan")
-
-    a = pd.Series(values_a, dtype=float)
-    b = pd.Series(values_b, dtype=float)
-    n1 = float(len(a))
-    n2 = float(len(b))
-    v1 = float(a.var(ddof=1))
-    v2 = float(b.var(ddof=1))
-    se = math.sqrt((v1 / n1) + (v2 / n2))
-    if se == 0:
-        return float("nan")
-
-    t_stat = (float(a.mean()) - float(b.mean())) / se
-    return float(math.erfc(abs(t_stat) / math.sqrt(2.0)))
+    """Return exactly the same Welch p-value as the two-group comparison table."""
+    return _welch_result(values_a, values_b)["p"]
 
 
 def _build_excel_report(sheets: dict[str, pd.DataFrame]) -> bytes:
@@ -575,8 +489,7 @@ def _to_numeric_series(values: pd.Series | list[float] | np.ndarray) -> pd.Serie
     return pd.to_numeric(pd.Series(values, dtype="object"), errors="coerce").dropna()
 
 
-AGGREGATIONS: dict[str, Callable[[pd.Series | list[float] | np.ndarray], float] | None] = {
-    "None": None,
+AGGREGATIONS: dict[str, Callable[[pd.Series | list[float] | np.ndarray], float]] = {
     "Mean": lambda s: float(_to_numeric_series(s).mean()),
     "Median": lambda s: float(_to_numeric_series(s).median()),
     "Min": lambda s: float(_to_numeric_series(s).min()),
@@ -644,9 +557,140 @@ def _gradient_style(df: pd.DataFrame, mode: str = "Global scale", palette: str =
         return df
 
 
+def _input_manifest() -> list[dict]:
+    records = st.session_state.get("input_records", {})
+    return [records.get(name) or input_record(name, None, table, _extract_time_from_filename(name))
+            for name, table in sorted(st.session_state.loaded_tables.items())]
+
+
+def _capture_analysis_config() -> dict:
+    """Capture effective choices, including dynamically created statistical selectors."""
+    settings = deepcopy(DEFAULT_SETTINGS)
+    settings.update(st.session_state.get("_last_settings", {}))
+    threshold_keys = {"IQR": "iqr_multiplier", "Z-score": "zscore_threshold", "MAD": "mad_threshold"}
+    active_threshold = threshold_keys.get(st.session_state.get("outlier_method", settings["outlier_method"]))
+    for key in settings:
+        # Streamlit may retain a stale widget default after an inactive slider is removed.
+        # Its permanent saved value, not hidden widget state, is authoritative.
+        if key in threshold_keys.values() and key != active_threshold:
+            continue
+        if key in st.session_state:
+            settings[key] = deepcopy(st.session_state[key])
+    groups = [deepcopy(cell) for cell in st.session_state.get("_plate_groups", [])
+              if cell["row_id"] in settings["selected_rows"] and cell["column"] in settings["selected_columns"]]
+    metrics = metric_names(settings, groups)
+    if "plot_columns" not in st.session_state and "plot_columns" not in st.session_state.get("_last_settings", {}):
+        settings["plot_columns"] = list(metrics)
+    settings["plot_columns"] = [c for c in settings["plot_columns"] if c in metrics]
+    for key in ("stat_metric", "ttest_metric_a", "ttest_metric_b"):
+        if settings[key] not in metrics:
+            settings[key] = None
+    return make_config(settings, groups, _input_manifest(), st.session_state["_software_record"])
+
+
+def _save_named_preset() -> None:
+    name = st.session_state.get("preset_name", "").strip()
+    if not name:
+        st.session_state["_settings_error"] = "Enter a preset name before saving."
+        return
+    st.session_state.analysis_presets[name] = _capture_analysis_config()
+    st.session_state["_settings_message"] = f"Preset '{name}' saved. Download its settings to keep it after restart."
+
+
+def _queue_named_preset() -> None:
+    name = st.session_state.get("preset_to_load", "")
+    if not name:
+        st.session_state["_settings_error"] = "Choose a preset to load."
+        return
+    st.session_state["_pending_config"] = deepcopy(st.session_state.analysis_presets[name])
+
+
+def _queue_settings_upload() -> None:
+    uploaded = st.session_state.get("settings_upload")
+    if uploaded is None:
+        st.session_state["_settings_error"] = "Choose a settings JSON file first."
+        return
+    try:
+        st.session_state["_pending_config"] = loads_config(uploaded.getvalue())
+    except (ValueError, TypeError) as exc:
+        st.session_state["_settings_error"] = str(exc)
+
+
+def _apply_pending_config(all_rows: list[str], all_columns: list[str]) -> None:
+    """Apply a queued document atomically, before any settings widgets are instantiated."""
+    pending = st.session_state.pop("_pending_config", None)
+    if pending is None:
+        return
+    try:
+        config = validate_config(pending)
+        settings = config["settings"]
+        missing_rows = set(settings["selected_rows"]) - set(all_rows)
+        missing_columns = set(settings["selected_columns"]) - set(all_columns)
+        if missing_rows or missing_columns:
+            raise ValueError(f"Settings were not applied: input rows/columns are missing. Rows: {sorted(missing_rows)}; columns: {sorted(missing_columns)}")
+    except (ValueError, TypeError) as exc:
+        st.session_state["_settings_error"] = str(exc)
+        return
+    for key, value in settings.items():
+        if value is None:
+            st.session_state.pop(key, None)
+        else:
+            st.session_state[key] = deepcopy(value)
+    st.session_state["_last_settings"] = deepcopy(settings)
+    st.session_state["_plate_groups"] = deepcopy(config["plate_groups"])
+    st.session_state.pop("_template_axes", None)
+    st.session_state["_replay_reference"] = config
+    st.session_state.analysis_ready = False
+    st.session_state["_settings_message"] = "Settings applied. Review the inputs, then press Run."
+
+
+def _prepare_selectbox(key: str, options: list) -> None:
+    """Discard stale selections before a widget is created, never after it is instantiated."""
+    if st.session_state.get(key) not in options:
+        st.session_state.pop(key, None)
+
+
+def _edit_plate_groups(rows: list[str], columns: list[str]) -> dict[str, list[tuple[str, str]]]:
+    """Keep the data editor's base stable across edits; replace it only on load/axis changes."""
+    axes = (tuple(rows), tuple(columns))
+    if st.session_state.get("_template_axes") != axes:
+        template = pd.DataFrame("", index=rows, columns=columns)
+        for cell in st.session_state.get("_plate_groups", []):
+            if cell["row_id"] in rows and cell["column"] in columns:
+                template.loc[cell["row_id"], cell["column"]] = cell["group"]
+        st.session_state["_template_base"] = template
+        st.session_state["_template_axes"] = axes
+        st.session_state["_template_revision"] = st.session_state.get("_template_revision", 0) + 1
+    edited = st.data_editor(st.session_state["_template_base"], width="stretch",
+                            key=f"plate_group_template_{st.session_state['_template_revision']}")
+    cells = []
+    mapping = {}
+    for row_id in edited.index:
+        for column in edited.columns:
+            value = edited.loc[row_id, column]
+            label = "" if pd.isna(value) else str(value).strip()
+            if label:
+                cells.append({"row_id": str(row_id), "column": str(column), "group": label})
+                mapping.setdefault(label, []).append((str(row_id), str(column)))
+    st.session_state["_plate_groups"] = cells
+    return mapping
+
+
+def _render_settings_download(slot) -> None:
+    config = _capture_analysis_config()
+    st.session_state["_current_analysis_config"] = config
+    st.session_state["_last_settings"] = deepcopy(config["settings"])
+    with slot.container():
+        st.download_button("Download settings.json", data=dumps_config(config),
+                           file_name="plate_master_analysis.json", mime="application/json")
+        st.caption("Settings include the plate groups and input checksums. Keep the original spreadsheets separately.")
+
+
 def run_dashboard() -> None:
     st.set_page_config(page_title="PlateMaster - Dashboard for Plate Analysis", layout="wide")
     st.title("PlateMaster - Dashboard for Plate Analysis")
+    st.caption(f"Version {APP_VERSION}")
+    st.session_state["_software_record"] = software_record(Path(__file__).resolve().parent)
     st.caption(
         "Load Excel files from server path OR upload from your local PC, choose rows/columns, aggregate, and plot across files."
     )
@@ -673,12 +717,16 @@ def run_dashboard() -> None:
             load_folder_clicked = st.button("Load folder")
             if load_folder_clicked:
                 loaded_tables = {}
+                records = {}
                 errors = []
                 for file in discover_excel_files(folder_path):
                     try:
-                        loaded_tables[file.name] = load_table_from_path(file)
+                        content = file.read_bytes()
+                        loaded_tables[file.name] = load_table_from_bytes(content, file.name)
+                        records[file.name] = input_record(file.name, content, loaded_tables[file.name], _extract_time_from_filename(file.name))
                     except Exception as exc:
                         errors.append(f"{file.name}: {exc}")
+                st.session_state.input_records = records
                 st.session_state.loaded_tables = loaded_tables
                 st.session_state.load_errors = errors
                 st.session_state.analysis_ready = False
@@ -698,10 +746,15 @@ def run_dashboard() -> None:
 
             if load_uploads_clicked:
                 loaded_tables = {}
+                records = {}
                 errors = []
                 for uploaded in uploaded_files or []:
                     try:
-                        loaded_tables[uploaded.name] = load_table_from_bytes(uploaded.getvalue(), uploaded.name)
+                        if uploaded.name in loaded_tables:
+                            raise ValueError("Duplicate input filename; rename the file before loading it")
+                        content = uploaded.getvalue()
+                        loaded_tables[uploaded.name] = load_table_from_bytes(content, uploaded.name)
+                        records[uploaded.name] = input_record(uploaded.name, content, loaded_tables[uploaded.name], _extract_time_from_filename(uploaded.name))
                     except Exception as exc:
                         errors.append(f"{uploaded.name}: {exc}")
 
@@ -713,12 +766,18 @@ def run_dashboard() -> None:
                                 if not lower.endswith(EXCEL_EXTENSIONS) or member.endswith("/"):
                                     continue
                                 try:
-                                    loaded_tables[Path(member).name] = load_table_from_bytes(archive.read(member), member)
+                                    name = Path(member).name
+                                    if name in loaded_tables:
+                                        raise ValueError("Duplicate input filename; rename the file before loading it")
+                                    content = archive.read(member)
+                                    loaded_tables[name] = load_table_from_bytes(content, member)
+                                    records[name] = input_record(name, content, loaded_tables[name], _extract_time_from_filename(name))
                                 except Exception as exc:
                                     errors.append(f"{member}: {exc}")
                     except Exception as exc:
                         errors.append(f"ZIP error: {exc}")
 
+                st.session_state.input_records = records
                 st.session_state.loaded_tables = loaded_tables
                 st.session_state.load_errors = errors
                 st.session_state.analysis_ready = False
@@ -745,18 +804,47 @@ def run_dashboard() -> None:
 
     all_rows = sorted({row for table in loaded_tables.values() for row in table["row_id"].astype(str).tolist()})
     all_columns = _sort_columns_natural(sorted({str(c) for table in loaded_tables.values() for c in table.columns if c != "row_id"}))
+    _apply_pending_config(all_rows, all_columns)
+    for key, value in st.session_state.get("_last_settings", {}).items():
+        if key not in st.session_state and value is not None:
+            st.session_state[key] = deepcopy(value)
+    active_method = st.session_state.get("outlier_method", "None")
+    previous_settings = st.session_state.get("_last_settings", {})
+    if active_method != previous_settings.get("outlier_method", "None"):
+        threshold_key = {"IQR": "iqr_multiplier", "Z-score": "zscore_threshold", "MAD": "mad_threshold"}.get(active_method)
+        if threshold_key:
+            st.session_state[threshold_key] = previous_settings.get(threshold_key, DEFAULT_SETTINGS[threshold_key])
+    # Switching data/layout can leave old widget values behind.
+    for key, options in ENUMS.items():
+        _prepare_selectbox(key, options)
+    if st.session_state.get("agg_name", "Mean") != "Mean" and st.session_state.get("error_method") in ("SEM", "95% CI"):
+        st.session_state.error_method = "None"
+    for key, options in (("selected_rows", all_rows), ("selected_columns", all_columns)):
+        if key in st.session_state:
+            st.session_state[key] = [v for v in st.session_state[key] if v in options]
+    if "_settings_error" in st.session_state:
+        st.error(st.session_state.pop("_settings_error"))
+    if "_settings_message" in st.session_state:
+        st.success(st.session_state.pop("_settings_message"))
+    if "_replay_reference" in st.session_state:
+        differences = replay_warnings(st.session_state["_replay_reference"], _input_manifest(), st.session_state["_software_record"])
+        if differences:
+            st.warning("These settings are being reused with different or unverifiable inputs/environment. This is not an exact replay:\n- " + "\n- ".join(differences))
+        else:
+            st.info("Saved input checksums, parsed data and numerical software versions match.")
+
 
     with st.sidebar:
         st.header("2) Selection")
         layout_mode = st.selectbox(
             "Aggregation layout",
-            options=["By original columns", "By original rows", "By plate groups (template)"],
+            options=LAYOUTS,
             index=0,
             key="agg_layout_mode",
         )
 
-        selected_rows = st.multiselect("Rows", options=all_rows, default=all_rows, key="selected_rows")
-        selected_columns = st.multiselect("Columns", options=all_columns, default=all_columns, key="selected_columns")
+        selected_rows = st.multiselect("Rows", options=all_rows, default=all_rows if "selected_rows" not in st.session_state else None, key="selected_rows")
+        selected_columns = st.multiselect("Columns", options=all_columns, default=all_columns if "selected_columns" not in st.session_state else None, key="selected_columns")
         selected_columns = _sort_columns_natural(selected_columns)
         agg_options = list(AGGREGATIONS.keys())
         agg_default_index = agg_options.index("Mean") if "Mean" in agg_options else 0
@@ -799,580 +887,540 @@ def run_dashboard() -> None:
         )
         preset_col1, preset_col3 = st.columns([3, 2])
         with preset_col1:
-            save_preset_clicked = st.button("Save preset now", use_container_width=True)
+            st.button("Save preset now", on_click=_save_named_preset, width="stretch")
         with preset_col3:
-            load_preset_clicked = st.button("Apply preset", use_container_width=True)
-
-        if save_preset_clicked:
-            if not preset_name.strip():
-                st.warning("Enter preset name before saving.")
-            else:
-                st.session_state.analysis_presets[preset_name.strip()] = {
-                    "agg_layout_mode": layout_mode,
-                    "selected_rows": selected_rows,
-                    "selected_columns": selected_columns,
-                    "agg_name": agg_name,
-                    "outlier_method": outlier_method,
-                    "iqr_multiplier": st.session_state.get("iqr_multiplier", 1.5),
-                    "zscore_threshold": st.session_state.get("zscore_threshold", 3.0),
-                    "mad_threshold": st.session_state.get("mad_threshold", 3.5),
-                    "color_scale_mode": color_scale_mode,
-                    "color_palette": color_palette,
-                    "plot_columns": st.session_state.get("plot_columns", list(selected_columns)),
-                    "plot_type": st.session_state.get("plot_type", "Line + points"),
-                    "error_method": st.session_state.get("error_method", "None"),
-                }
-                st.success(f"Preset '{preset_name.strip()}' saved.")
-
-        if load_preset_clicked:
-            if not preset_to_load:
-                st.warning("Please choose a preset to load.")
-            else:
-                preset = st.session_state.analysis_presets.get(preset_to_load, {})
-                st.session_state.agg_layout_mode = preset.get("agg_layout_mode", "By original columns")
-                st.session_state.selected_rows = [r for r in preset.get("selected_rows", all_rows) if r in all_rows]
-                st.session_state.selected_columns = [c for c in preset.get("selected_columns", all_columns) if c in all_columns]
-                st.session_state.agg_name = preset.get("agg_name", "Mean")
-                st.session_state.outlier_method = preset.get("outlier_method", "None")
-                st.session_state.iqr_multiplier = float(preset.get("iqr_multiplier", 1.5))
-                st.session_state.zscore_threshold = float(preset.get("zscore_threshold", 3.0))
-                st.session_state.mad_threshold = float(preset.get("mad_threshold", 3.5))
-                st.session_state.color_scale_mode = preset.get("color_scale_mode", "Global scale")
-                st.session_state.color_palette = preset.get("color_palette", "Rose")
-                valid_plot_keys = set(all_columns) | set(all_rows)
-                st.session_state.plot_columns = [c for c in preset.get("plot_columns", []) if c in valid_plot_keys]
-                st.session_state.plot_type = preset.get("plot_type", "Line + points")
-                st.session_state.error_method = preset.get("error_method", "None")
-                st.success(f"Preset '{preset_to_load}' applied.")
-                st.rerun()
+            st.button("Apply preset", on_click=_queue_named_preset, width="stretch")
+        st.file_uploader("Import analysis settings (.json)", type=["json"], key="settings_upload")
+        st.button("Apply imported settings", on_click=_queue_settings_upload)
+        settings_download_slot = st.empty()
 
         run_clicked = st.button("Run")
         if run_clicked:
             st.session_state.analysis_ready = True
 
-    if not selected_rows or not selected_columns:
-        st.warning("Please select at least one row and one column")
-        return
-
-    group_map: dict[str, list[tuple[str, str]]] = {}
-    metric_labels = selected_columns
-    if layout_mode == "By original rows":
-        metric_labels = selected_rows
-    elif layout_mode == "By plate groups (template)":
-        st.header("Plate template grouping")
-        st.caption("Enter group names into cells. Cells with the same label will be aggregated together.")
-        template_df = pd.DataFrame("", index=selected_rows, columns=selected_columns)
-        group_editor = st.data_editor(template_df, width="stretch", key="plate_group_template")
-        for row_id in group_editor.index:
-            for col in group_editor.columns:
-                label = str(group_editor.loc[row_id, col]).strip()
-                if label:
-                    group_map.setdefault(label, []).append((str(row_id), str(col)))
-
-        if not group_map:
-            st.warning("Please define at least one group in plate template")
+    try:
+        if not selected_rows or not selected_columns:
+            st.warning("Please select at least one row and one column")
             return
 
-        metric_labels = sorted(group_map.keys())
+        group_map: dict[str, list[tuple[str, str]]] = {}
+        metric_labels = selected_columns
+        if layout_mode == "By original rows":
+            metric_labels = selected_rows
+        elif layout_mode == "By plate groups (template)":
+            st.header("Plate template grouping")
+            st.caption("Enter group names into cells. Cells with the same label will be aggregated together.")
+            group_map = _edit_plate_groups(selected_rows, selected_columns)
 
-    if not st.session_state.analysis_ready:
-        st.info("Press **Run** to start analysis with current settings.")
-        return
+            if not group_map:
+                st.warning("Please define at least one group in plate template")
+                return
 
-    agg_func = AGGREGATIONS[agg_name]
-    is_no_aggregation = agg_name == "None"
-    aggregated_tables: dict[str, pd.DataFrame] = {}
-    removed_outliers_log: list[dict[str, float | str | None]] = []
-    total_points_per_column: dict[str, int] = {c: 0 for c in metric_labels}
-    total_points_per_time: dict[float, int] = {}
-    error_lookup: dict[tuple[str, str], dict[str, float]] = {}
-    source_value_lookup: dict[tuple[str, str], list[float]] = {}
+            metric_labels = sorted(group_map.keys())
 
-    for name, table in loaded_tables.items():
-        try:
-            filtered_for_stats = table[table["row_id"].isin(selected_rows)]
-            file_time = _extract_time_from_filename(name)
-            file_total_points = 0
+        if not st.session_state.analysis_ready:
+            st.info("Press **Run** to start analysis with current settings.")
+            return
 
-            if layout_mode == "By plate groups (template)":
-                table_indexed = table.set_index("row_id", drop=False)
-                for group_name, members in group_map.items():
-                    count = 0
-                    for row_id, col in members:
-                        if row_id in table_indexed.index and col in table_indexed.columns:
-                            v = pd.to_numeric(table_indexed.at[row_id, col], errors="coerce")
-                            if pd.notna(v):
-                                count += 1
-                    total_points_per_column[group_name] = total_points_per_column.get(group_name, 0) + count
-                    file_total_points += count
+        agg_func = AGGREGATIONS[agg_name]
+        aggregated_tables: dict[str, pd.DataFrame] = {}
+        removed_outliers_log: list[dict[str, float | str | None]] = []
+        total_points_per_column: dict[str, int] = {c: 0 for c in metric_labels}
+        total_points_per_time: dict[float, int] = {}
+        error_lookup: dict[tuple[str, str], dict[str, float]] = {}
+        source_value_lookup: dict[tuple[str, str], list[float]] = {}
 
-                avg_table, removed_rows, column_stats, source_values = aggregate_by_groups(
-                    table, group_map, agg_func, outlier_method, outlier_strictness
-                )
-            elif layout_mode == "By original rows":
-                row_filtered = table[table["row_id"].isin(selected_rows)]
-                for _, row in row_filtered.iterrows():
-                    row_id = str(row["row_id"])
-                    count = int(pd.to_numeric(row[selected_columns], errors="coerce").notna().sum())
-                    total_points_per_column[row_id] = total_points_per_column.get(row_id, 0) + count
-                    file_total_points += count
+        for name, table in loaded_tables.items():
+            try:
+                filtered_for_stats = table[table["row_id"].isin(selected_rows)]
+                file_time = _extract_time_from_filename(name)
+                file_total_points = 0
 
-                avg_table, removed_rows, column_stats, source_values = aggregate_columns_by_row(
-                    table, selected_rows, selected_columns, agg_func, outlier_method, outlier_strictness
-                )
-            else:
-                for col in selected_columns:
-                    if col in filtered_for_stats.columns:
-                        count = int(filtered_for_stats[col].notna().sum())
-                        total_points_per_column[col] = total_points_per_column.get(col, 0) + count
+                if layout_mode == "By plate groups (template)":
+                    table_indexed = table.set_index("row_id", drop=False)
+                    for group_name, members in group_map.items():
+                        count = 0
+                        for row_id, col in members:
+                            if row_id in table_indexed.index and col in table_indexed.columns:
+                                v = pd.to_numeric(table_indexed.at[row_id, col], errors="coerce")
+                                if pd.notna(v):
+                                    count += 1
+                        total_points_per_column[group_name] = total_points_per_column.get(group_name, 0) + count
                         file_total_points += count
 
-                if is_no_aggregation:
-                    avg_table, removed_rows, column_stats, source_values = no_aggregate_rows(
-                        table, selected_rows, selected_columns, outlier_method, outlier_strictness
+                    avg_table, removed_rows, column_stats, source_values = aggregate_by_groups(
+                        table, group_map, agg_func, outlier_method, outlier_strictness
+                    )
+                elif layout_mode == "By original rows":
+                    row_filtered = table[table["row_id"].isin(selected_rows)]
+                    for _, row in row_filtered.iterrows():
+                        row_id = str(row["row_id"])
+                        count = int(pd.to_numeric(row[selected_columns], errors="coerce").notna().sum())
+                        total_points_per_column[row_id] = total_points_per_column.get(row_id, 0) + count
+                        file_total_points += count
+
+                    avg_table, removed_rows, column_stats, source_values = aggregate_columns_by_row(
+                        table, selected_rows, selected_columns, agg_func, outlier_method, outlier_strictness
                     )
                 else:
+                    for col in selected_columns:
+                        if col in filtered_for_stats.columns:
+                            count = int(filtered_for_stats[col].notna().sum())
+                            total_points_per_column[col] = total_points_per_column.get(col, 0) + count
+                            file_total_points += count
+
                     avg_table, removed_rows, column_stats, source_values = aggregate_rows(
                         table, selected_rows, selected_columns, agg_func, outlier_method, outlier_strictness
                     )
 
-            if file_time is not None:
-                total_points_per_time[file_time] = total_points_per_time.get(file_time, 0) + file_total_points
+                if file_time is not None:
+                    total_points_per_time[file_time] = total_points_per_time.get(file_time, 0) + file_total_points
 
-            aggregated_tables[name] = avg_table
-            for col_name, stats in column_stats.items():
-                error_lookup[(name, str(col_name))] = stats
-            for col_name, vals in source_values.items():
-                source_value_lookup[(name, str(col_name))] = vals
-            for item in removed_rows:
-                removed_outliers_log.append({"Time": file_time, "file": name, **item})
-        except Exception:
-            continue
+                aggregated_tables[name] = avg_table
+                for col_name, stats in column_stats.items():
+                    error_lookup[(name, str(col_name))] = stats
+                for col_name, vals in source_values.items():
+                    source_value_lookup[(name, str(col_name))] = vals
+                for item in removed_rows:
+                    removed_outliers_log.append({"Time": file_time, "file": name, **item})
+            except Exception:
+                continue
 
-    if not aggregated_tables:
-        st.error("No aggregated tables could be produced for the current selection")
-        return
+        if not aggregated_tables:
+            st.error("No aggregated tables could be produced for the current selection")
+            return
 
-    combined_rows: list[dict[str, float | str | None]] = []
-    for name, avg_table in aggregated_tables.items():
-        row = {k: float(v) for k, v in avg_table.iloc[0].to_dict().items()}
-        row["Time"] = _extract_time_from_filename(name)
-        row["File"] = name
-        combined_rows.append(row)
+        combined_rows: list[dict[str, float | str | None]] = []
+        for name, avg_table in aggregated_tables.items():
+            row = {k: float(v) for k, v in avg_table.iloc[0].to_dict().items()}
+            row["Time"] = _extract_time_from_filename(name)
+            row["File"] = name
+            combined_rows.append(row)
 
-    combined_df = pd.DataFrame(combined_rows)
-    combined_df = combined_df.sort_values(by="Time", na_position="last").reset_index(drop=True)
-    metric_columns = [c for c in _sort_columns_natural(metric_labels) if c in combined_df.columns]
-    display_columns = ["Time", *metric_columns]
+        combined_df = pd.DataFrame(combined_rows)
+        combined_df = combined_df.sort_values(by="Time", na_position="last").reset_index(drop=True)
+        metric_columns = [c for c in _sort_columns_natural(metric_labels) if c in combined_df.columns]
+        display_columns = ["Time", *metric_columns]
 
-    st.header("Aggregated table (all files)")
-    combined_display_df = combined_df[display_columns].copy()
-    combined_display_df["Time"] = combined_display_df["Time"].map(
-        lambda v: _format_time_label(v) if isinstance(v, (float, int, np.floating, np.integer)) else str(v)
-    )
-    st.dataframe(_gradient_style(combined_display_df, color_scale_mode, color_palette), width="stretch")
-
-    st.header("Statistical analysis")
-    stat_col1, stat_col2 = st.columns(2)
-
-    unique_times = sorted(combined_df["Time"].dropna().unique().tolist())
-    if not unique_times:
-        st.warning("No Time values available for statistical analysis.")
-        return
-
-    with stat_col1:
-        selected_stat_time = st.selectbox(
-            "Row (from Aggregated table)",
-            options=unique_times,
-            format_func=_format_time_label,
+        st.header("Aggregated table (all files)")
+        combined_display_df = combined_df[display_columns].copy()
+        combined_display_df["Time"] = combined_display_df["Time"].map(
+            lambda v: _format_time_label(v) if isinstance(v, (float, int, np.floating, np.integer)) else str(v)
         )
+        st.dataframe(_gradient_style(combined_display_df, color_scale_mode, color_palette), width="stretch")
 
-    with stat_col2:
-        selected_stat_metric = st.selectbox(
-            "Column (from Aggregated table)",
-            options=[c for c in _sort_columns_natural(metric_labels) if c in combined_df.columns],
-        )
+        st.header("Statistical analysis")
+        stat_col1, stat_col2 = st.columns(2)
 
-    selected_files = combined_df.loc[combined_df["Time"] == selected_stat_time, "File"].astype(str).tolist()
-    stat_values: list[float] = []
-    for file_name in selected_files:
-        stat_values.extend(source_value_lookup.get((file_name, str(selected_stat_metric)), []))
-    stat_table = _basic_stat_metrics(stat_values)
-    st.dataframe(stat_table, width="stretch")
+        unique_times = sorted(combined_df["Time"].dropna().unique().tolist())
+        if not unique_times:
+            st.warning("No Time values available for statistical analysis.")
+            return
 
-    st.subheader("T-test analysis")
-    ttest_col1, ttest_col2, ttest_col3, ttest_col4 = st.columns(4)
-    with ttest_col1:
-        ttest_time_a = st.selectbox("Group A", options=unique_times, format_func=_format_time_label, key="ttest_time_a")
-    with ttest_col2:
-        ttest_metric_a = st.selectbox("Group A Column", options=metric_columns, key="ttest_metric_a")
+        for key in ("stat_time", "ttest_time_a", "ttest_time_b"):
+            _prepare_selectbox(key, unique_times)
+        for key in ("stat_metric", "ttest_metric_a", "ttest_metric_b"):
+            _prepare_selectbox(key, metric_columns)
+        st.caption("Tests use independent observations. Technical wells are not automatically independent biological replicates. P-values are unadjusted for multiple comparisons.")
+        with stat_col1:
+            selected_stat_time = st.selectbox(
+                "Row (from Aggregated table)",
+                options=unique_times,
+                format_func=_format_time_label,
+                key="stat_time",
+            )
 
-    with ttest_col3:
-        ttest_time_b = st.selectbox(
-            "Group B",
-            options=unique_times,
-            format_func=_format_time_label,
-            key="ttest_time_b",
-        )
-    with ttest_col4:
-        ttest_metric_b = st.selectbox("Group B Column", options=metric_columns, key="ttest_metric_b")
+        with stat_col2:
+            selected_stat_metric = st.selectbox(
+                "Column (from Aggregated table)",
+                options=[c for c in _sort_columns_natural(metric_labels) if c in combined_df.columns],
+                key="stat_metric",
+            )
 
-    files_a = combined_df.loc[combined_df["Time"] == ttest_time_a, "File"].astype(str).tolist()
-    files_b = combined_df.loc[combined_df["Time"] == ttest_time_b, "File"].astype(str).tolist()
-    values_a: list[float] = []
-    values_b: list[float] = []
-    for file_name in files_a:
-        values_a.extend(source_value_lookup.get((file_name, str(ttest_metric_a)), []))
-    for file_name in files_b:
-        values_b.extend(source_value_lookup.get((file_name, str(ttest_metric_b)), []))
+        selected_files = combined_df.loc[combined_df["Time"] == selected_stat_time, "File"].astype(str).tolist()
+        stat_values: list[float] = []
+        for file_name in selected_files:
+            stat_values.extend(source_value_lookup.get((file_name, str(selected_stat_metric)), []))
+        stat_table = _basic_stat_metrics(stat_values)
+        st.dataframe(stat_table.astype({"Value": "string"}), width="stretch")
 
-    ttest_df = _welch_t_test(values_a, values_b)
-    st.dataframe(ttest_df, width="stretch")
+        st.subheader("T-test analysis")
+        ttest_col1, ttest_col2, ttest_col3, ttest_col4 = st.columns(4)
+        with ttest_col1:
+            ttest_time_a = st.selectbox("Group A", options=unique_times, format_func=_format_time_label, key="ttest_time_a")
+        with ttest_col2:
+            ttest_metric_a = st.selectbox("Group A Column", options=metric_columns, key="ttest_metric_a")
 
-    st.subheader("Pairwise T-test p-values matrix (row-column vs row-column)")
-    group_values: dict[str, list[float]] = {}
-    ordered_group_labels: list[str] = []
-    for tm in unique_times:
-        tm_label = _format_time_label(tm)
-        files_tm = combined_df.loc[combined_df["Time"] == tm, "File"].astype(str).tolist()
-        for metric in metric_columns:
-            label = f"{tm_label}-{metric}"
-            vals_metric: list[float] = []
-            for file_name in files_tm:
-                vals_metric.extend(source_value_lookup.get((file_name, str(metric)), []))
-            group_values[label] = vals_metric
-            ordered_group_labels.append(label)
+        with ttest_col3:
+            ttest_time_b = st.selectbox(
+                "Group B",
+                options=unique_times,
+                format_func=_format_time_label,
+                key="ttest_time_b",
+            )
+        with ttest_col4:
+            ttest_metric_b = st.selectbox("Group B Column", options=metric_columns, key="ttest_metric_b")
 
-    pairwise_matrix_df = pd.DataFrame("", index=ordered_group_labels, columns=ordered_group_labels)
-    for i, label_i in enumerate(ordered_group_labels):
-        for j, label_j in enumerate(ordered_group_labels):
-            if i == j:
-                pairwise_matrix_df.loc[label_i, label_j] = "1.0"
-            elif j > i:
-                p_val = _welch_p_value(group_values[label_i], group_values[label_j])
-                if pd.isna(p_val):
-                    display_p = "N/A"
-                elif p_val < 0.005:
-                    display_p = "<0.005"
-                else:
-                    display_p = f"{p_val:.6f}"
-                pairwise_matrix_df.loc[label_i, label_j] = display_p
-                pairwise_matrix_df.loc[label_j, label_i] = display_p
+        files_a = combined_df.loc[combined_df["Time"] == ttest_time_a, "File"].astype(str).tolist()
+        files_b = combined_df.loc[combined_df["Time"] == ttest_time_b, "File"].astype(str).tolist()
+        values_a: list[float] = []
+        values_b: list[float] = []
+        for file_name in files_a:
+            values_a.extend(source_value_lookup.get((file_name, str(ttest_metric_a)), []))
+        for file_name in files_b:
+            values_b.extend(source_value_lookup.get((file_name, str(ttest_metric_b)), []))
 
-    if pairwise_matrix_df.empty:
-        st.info("Not enough data for pairwise row-column T-tests.")
-    else:
-        st.dataframe(pairwise_matrix_df, width="stretch")
+        ttest_df = _welch_t_test(values_a, values_b)
+        st.dataframe(ttest_df.astype({"Value": "string"}), width="stretch")
 
-    removed_df_export = pd.DataFrame(removed_outliers_log)
-    if not removed_df_export.empty:
-        removed_df_export = removed_df_export.sort_values(by=["Time", "column", "row_id"], na_position="last")
+        st.subheader("Pairwise T-test p-values matrix (row-column vs row-column)")
+        group_values: dict[str, list[float]] = {}
+        ordered_group_labels: list[str] = []
+        for tm in unique_times:
+            tm_label = _format_time_label(tm)
+            files_tm = combined_df.loc[combined_df["Time"] == tm, "File"].astype(str).tolist()
+            for metric in metric_columns:
+                label = f"{tm_label}-{metric}"
+                vals_metric: list[float] = []
+                for file_name in files_tm:
+                    vals_metric.extend(source_value_lookup.get((file_name, str(metric)), []))
+                group_values[label] = vals_metric
+                ordered_group_labels.append(label)
 
-    stats_rows: list[dict[str, float | int | str]] = []
-    if outlier_method != "None":
-        removed_total = int(len(removed_df_export))
-        total_points = int(sum(total_points_per_column.values()))
-        overall_pct = (removed_total / total_points * 100) if total_points else 0.0
-        stats_rows.append({"Scope": "Overall", "Key": "All", "Total points": total_points, "Removed": removed_total, "Removed %": round(overall_pct, 2)})
+        pairwise_matrix_df = pd.DataFrame("", index=ordered_group_labels, columns=ordered_group_labels)
+        for i, label_i in enumerate(ordered_group_labels):
+            for j, label_j in enumerate(ordered_group_labels):
+                if i == j:
+                    pairwise_matrix_df.loc[label_i, label_j] = "1.0"
+                elif j > i:
+                    p_val = _welch_p_value(group_values[label_i], group_values[label_j])
+                    if pd.isna(p_val):
+                        display_p = "N/A"
+                    elif p_val < 0.005:
+                        display_p = "<0.005"
+                    else:
+                        display_p = f"{p_val:.6f}"
+                    pairwise_matrix_df.loc[label_i, label_j] = display_p
+                    pairwise_matrix_df.loc[label_j, label_i] = display_p
 
-        for col in _sort_columns_natural(metric_labels):
-            col_total = int(total_points_per_column.get(col, 0))
-            col_removed = int((removed_df_export["column"] == col).sum()) if not removed_df_export.empty else 0
-            col_pct = (col_removed / col_total * 100) if col_total else 0.0
-            stats_rows.append({"Scope": "Column", "Key": str(col), "Total points": col_total, "Removed": col_removed, "Removed %": round(col_pct, 2)})
-
-        for tm in sorted(total_points_per_time.keys()):
-            tm_total = int(total_points_per_time[tm])
-            tm_removed = int((removed_df_export["Time"] == tm).sum()) if not removed_df_export.empty else 0
-            tm_pct = (tm_removed / tm_total * 100) if tm_total else 0.0
-            stats_rows.append({"Scope": "Time", "Key": str(tm), "Total points": tm_total, "Removed": tm_removed, "Removed %": round(tm_pct, 2)})
-
-    outlier_stats_df = pd.DataFrame(stats_rows)
-
-    st.header("Outlier filtering log")
-    left_col, right_col = st.columns(2)
-
-    with left_col:
-        st.subheader("Removed values by file/row/column")
-        if outlier_method == "None":
-            st.info("Outlier filtering is disabled.")
-        elif not removed_outliers_log:
-            st.info("No outliers were removed with current method/settings.")
+        if pairwise_matrix_df.empty:
+            st.info("Not enough data for pairwise row-column T-tests.")
         else:
-            st.dataframe(removed_df_export, width="stretch")
+            st.dataframe(pairwise_matrix_df, width="stretch")
 
-    with right_col:
-        st.subheader("Outlier statistics")
-        if outlier_method == "None":
-            st.info("Outlier filtering is disabled.")
+        removed_df_export = pd.DataFrame(removed_outliers_log)
+        if not removed_df_export.empty:
+            removed_df_export = removed_df_export.sort_values(by=["Time", "column", "row_id"], na_position="last")
+
+        stats_rows: list[dict[str, float | int | str]] = []
+        if outlier_method != "None":
+            removed_total = int(len(removed_df_export))
+            total_points = int(sum(total_points_per_column.values()))
+            overall_pct = (removed_total / total_points * 100) if total_points else 0.0
+            stats_rows.append({"Scope": "Overall", "Key": "All", "Total points": total_points, "Removed": removed_total, "Removed %": round(overall_pct, 2)})
+
+            for col in _sort_columns_natural(metric_labels):
+                col_total = int(total_points_per_column.get(col, 0))
+                col_removed = int((removed_df_export["column"] == col).sum()) if not removed_df_export.empty else 0
+                col_pct = (col_removed / col_total * 100) if col_total else 0.0
+                stats_rows.append({"Scope": "Column", "Key": str(col), "Total points": col_total, "Removed": col_removed, "Removed %": round(col_pct, 2)})
+
+            for tm in sorted(total_points_per_time.keys()):
+                tm_total = int(total_points_per_time[tm])
+                tm_removed = int((removed_df_export["Time"] == tm).sum()) if not removed_df_export.empty else 0
+                tm_pct = (tm_removed / tm_total * 100) if tm_total else 0.0
+                stats_rows.append({"Scope": "Time", "Key": str(tm), "Total points": tm_total, "Removed": tm_removed, "Removed %": round(tm_pct, 2)})
+
+        outlier_stats_df = pd.DataFrame(stats_rows)
+
+        st.header("Outlier filtering log")
+        left_col, right_col = st.columns(2)
+
+        with left_col:
+            st.subheader("Removed values by file/row/column")
+            if outlier_method == "None":
+                st.info("Outlier filtering is disabled.")
+            elif not removed_outliers_log:
+                st.info("No outliers were removed with current method/settings.")
+            else:
+                st.dataframe(removed_df_export, width="stretch")
+
+        with right_col:
+            st.subheader("Outlier statistics")
+            if outlier_method == "None":
+                st.info("Outlier filtering is disabled.")
+            else:
+                st.dataframe(outlier_stats_df, width="stretch")
+
+        st.header("Cross-file plot")
+        if "plot_columns" not in st.session_state:
+            st.session_state.plot_columns = list(metric_labels)
+        st.session_state.plot_columns = [c for c in st.session_state.plot_columns if c in metric_labels]
+
+        plot_columns = st.multiselect(
+            "Columns to display on one chart (different colors)",
+            options=metric_columns,
+            key="plot_columns",
+        )
+
+        controls_col1, controls_col2 = st.columns(2)
+        with controls_col1:
+            plot_type = st.selectbox(
+                "Plot type",
+                options=PLOT_TYPES,
+                index=0,
+                key="plot_type",
+            )
+        with controls_col2:
+            error_method = st.selectbox(
+                "Error bar method",
+                options=["None", "Std", "SEM", "95% CI", "IQR/2", "MAD"] if agg_name == "Mean" else ["None", "Std", "IQR/2", "MAD"],
+                index=0,
+                key="error_method",
+            )
+
+        plot_columns = [c for c in plot_columns if c in metric_labels]
+        if not plot_columns:
+            st.warning("Please choose at least one column for chart")
+            return
+
+        plot_df = combined_df[["File", "Time", *[c for c in _sort_columns_natural(metric_labels) if c in combined_df.columns]]].copy()
+        available_plot_columns = [c for c in plot_columns if c in plot_df.columns]
+        if not available_plot_columns:
+            st.warning("No data for selected chart columns")
+            return
+
+        chart_long = plot_df[["File", "Time", *available_plot_columns]].melt(
+            id_vars=["File", "Time"], var_name="Column", value_name="Value"
+        )
+        chart_long = chart_long.dropna(subset=["Value", "Time"]).copy()
+        sorted_cols = _sort_columns_natural(available_plot_columns)
+        chart_long["Column"] = pd.Categorical(chart_long["Column"], categories=sorted_cols, ordered=True)
+        chart_long["TimeLabel"] = chart_long["Time"].map(_format_time_label)
+        time_sort_order = [_format_time_label(v) for v in sorted(chart_long["Time"].dropna().unique())]
+
+        error_field_map = {
+            "Std": "std",
+            "SEM": "sem",
+            "95% CI": "ci95",
+            "IQR/2": "iqr_half",
+            "MAD": "mad",
+        }
+        if error_method != "None":
+            field = error_field_map[error_method]
+            chart_long["Error"] = chart_long.apply(
+                lambda r: float(error_lookup.get((str(r["File"]), str(r["Column"])), {}).get(field, float("nan"))), axis=1
+            )
         else:
-            st.dataframe(outlier_stats_df, width="stretch")
+            chart_long["Error"] = 0.0
 
-    st.header("Cross-file plot")
-    if "plot_columns" not in st.session_state:
-        st.session_state.plot_columns = list(metric_labels)
-    st.session_state.plot_columns = [c for c in st.session_state.plot_columns if c in metric_labels]
+        chart_long["y_low"] = chart_long["Value"] - chart_long["Error"]
+        chart_long["y_high"] = chart_long["Value"] + chart_long["Error"]
 
-    plot_columns = st.multiselect(
-        "Columns to display on one chart (different colors)",
-        options=metric_columns,
-        key="plot_columns",
-    )
+        y_candidates = chart_long["Value"]
+        if error_method != "None" and plot_type in {"Line + points", "Line + points (по Columns)", "Scatter", "Bar plot (по Time)", "Bar plot (по Columns)"}:
+            y_candidates = pd.concat([chart_long["Value"], chart_long["y_low"], chart_long["y_high"]], ignore_index=True)
+        y_min = float(y_candidates.min()) if not y_candidates.empty else 0.0
+        y_max = float(y_candidates.max()) if not y_candidates.empty else 1.0
+        pad = (y_max - y_min) * 0.08 if y_max > y_min else 0.1
+        y_scale = alt.Scale(domain=[y_min - pad, y_max + pad], nice=True)
 
-    controls_col1, controls_col2 = st.columns(2)
-    with controls_col1:
-        plot_type = st.selectbox(
-            "Plot type",
-            options=["Line + points", "Line + points (по Columns)", "Scatter", "Bar plot (по Time)", "Bar plot (по Columns)", "Box plot (по Time)", "Box plot (по Columns)", "Violin plot (по Time)", "Violin plot (по Columns)"],
-            index=0,
-            key="plot_type",
-        )
-    with controls_col2:
-        error_method = st.selectbox(
-            "Error bar method",
-            options=["None", "Std", "SEM", "95% CI", "IQR/2", "MAD"],
-            index=0,
-            key="error_method",
-        )
+        x_min = float(chart_long["Time"].min()) if not chart_long.empty else 0.0
+        x_max = float(chart_long["Time"].max()) if not chart_long.empty else 1.0
+        x_pad = (x_max - x_min) * 0.04 if x_max > x_min else 0.5
+        x_scale = alt.Scale(domain=[x_min - x_pad, x_max + x_pad], nice=True)
+        cap_half_width = max((x_max - x_min) * 0.006, 0.02)
+        chart_long["x_left"] = chart_long["Time"] - cap_half_width
+        chart_long["x_right"] = chart_long["Time"] + cap_half_width
 
-    plot_columns = [c for c in plot_columns if c in metric_labels]
-    if not plot_columns:
-        st.warning("Please choose at least one column for chart")
-        return
+        if plot_type == "Scatter":
+            chart = (
+                alt.Chart(chart_long)
+                .mark_point(filled=True, size=130, opacity=0.95)
+                .encode(
+                    x=alt.X("Time:Q", title="Time", scale=x_scale),
+                    y=alt.Y("Value:Q", title="Aggregated value", scale=y_scale),
+                    color=alt.Color("Column:N", title="Column"),
+                    tooltip=["Time", "File", "Column", "Value"],
+                )
+                .interactive()
+                .properties(height=450)
+            )
+        elif plot_type == "Bar plot (по Time)":
+            chart = (
+                alt.Chart(chart_long)
+                .mark_bar(opacity=0.88)
+                .encode(
+                    x=alt.X("TimeLabel:N", title="Time", sort=time_sort_order),
+                    y=alt.Y("Value:Q", title="Aggregated value", scale=y_scale, stack=None),
+                    xOffset=alt.XOffset("Column:N"),
+                    color=alt.Color("Column:N", title="Column"),
+                    tooltip=["Time", "File", "Column", "Value"],
+                )
+                .properties(height=450)
+            )
+        elif plot_type == "Bar plot (по Columns)":
+            chart = (
+                alt.Chart(chart_long)
+                .mark_bar(opacity=0.88)
+                .encode(
+                    x=alt.X("Column:N", title="Column", sort=sorted_cols),
+                    y=alt.Y("Value:Q", title="Aggregated value", scale=y_scale, stack=None),
+                    xOffset=alt.XOffset("TimeLabel:N"),
+                    color=alt.Color("TimeLabel:N", title="Time"),
+                    tooltip=["Time", "File", "Column", "Value"],
+                )
+                .properties(height=450)
+            )
+        elif plot_type == "Box plot (по Time)":
+            chart = (
+                alt.Chart(chart_long)
+                .mark_boxplot(extent="min-max", size=24)
+                .encode(
+                    x=alt.X("TimeLabel:N", title="Time", sort=time_sort_order),
+                    y=alt.Y("Value:Q", title="Aggregated value", scale=y_scale),
+                    color=alt.Color("TimeLabel:N", title="Time"),
+                    tooltip=["Time", "Value"],
+                )
+                .properties(height=460)
+            )
+        elif plot_type == "Box plot (по Columns)":
+            chart = (
+                alt.Chart(chart_long)
+                .mark_boxplot(extent="min-max", size=24)
+                .encode(
+                    x=alt.X("Column:N", title="Column", sort=sorted_cols),
+                    y=alt.Y("Value:Q", title="Aggregated value", scale=y_scale),
+                    color=alt.Color("Column:N", title="Column"),
+                    tooltip=["Column", "Value"],
+                )
+                .properties(height=460)
+            )
+        elif plot_type == "Violin plot (по Time)":
+            if chart_long.empty:
+                st.warning("No data available for violin plot")
+                return
 
-    plot_df = combined_df[["File", "Time", *[c for c in _sort_columns_natural(metric_labels) if c in combined_df.columns]]].copy()
-    available_plot_columns = [c for c in plot_columns if c in plot_df.columns]
-    if not available_plot_columns:
-        st.warning("No data for selected chart columns")
-        return
+            violin_base = (
+                alt.Chart(chart_long)
+                .transform_density(
+                    "Value",
+                    as_=["Value", "Density"],
+                    groupby=["TimeLabel"],
+                )
+                .mark_area(orient="horizontal", opacity=0.62, color="#ff6ab6")
+                .encode(
+                    y=alt.Y("Value:Q", title="Aggregated value", scale=y_scale),
+                    x=alt.X("Density:Q", stack="center", axis=None),
+                )
+            )
+            chart = violin_base.facet(
+                column=alt.Column("TimeLabel:N", title="Time", sort=time_sort_order, header=alt.Header(labelAngle=0)),
+                columns=4,
+            ).properties(height=180, width=80)
+        elif plot_type == "Violin plot (по Columns)":
+            chart = (
+                alt.Chart(chart_long)
+                .transform_density(
+                    "Value",
+                    as_=["Value", "Density"],
+                    groupby=["Column"],
+                )
+                .mark_area(orient="horizontal", opacity=0.62)
+                .encode(
+                    y=alt.Y("Value:Q", title="Aggregated value", scale=y_scale),
+                    x=alt.X("Density:Q", stack="center", axis=None),
+                    color=alt.Color("Column:N", title="Column"),
+                    column=alt.Column("Column:N", title="Column", sort=sorted_cols, spacing=10),
+                )
+                .properties(height=440)
+            )
+        elif plot_type == "Line + points (по Columns)":
+            by_col = chart_long.copy()
+            by_col["Column"] = by_col["Column"].astype(str)
 
-    chart_long = plot_df[["File", "Time", *available_plot_columns]].melt(
-        id_vars=["File", "Time"], var_name="Column", value_name="Value"
-    )
-    chart_long = chart_long.dropna(subset=["Value", "Time"]).copy()
-    sorted_cols = _sort_columns_natural(available_plot_columns)
-    chart_long["Column"] = pd.Categorical(chart_long["Column"], categories=sorted_cols, ordered=True)
-    chart_long["TimeLabel"] = chart_long["Time"].map(_format_time_label)
-    time_sort_order = [_format_time_label(v) for v in sorted(chart_long["Time"].dropna().unique())]
+            base = alt.Chart(by_col).encode(
+                x=alt.X("Column:N", title="Column", sort=sorted_cols),
+                y=alt.Y("Value:Q", title="Aggregated value", scale=y_scale),
+                color=alt.Color("TimeLabel:N", title="Time"),
+                detail=alt.Detail("File:N"),
+                tooltip=["TimeLabel", "File", "Column", "Value", "Error"],
+            )
 
-    error_field_map = {
-        "Std": "std",
-        "SEM": "sem",
-        "95% CI": "ci95",
-        "IQR/2": "iqr_half",
-        "MAD": "mad",
-    }
-    if error_method != "None":
-        field = error_field_map[error_method]
-        chart_long["Error"] = chart_long.apply(
-            lambda r: float(error_lookup.get((str(r["File"]), str(r["Column"])), {}).get(field, 0.0)), axis=1
-        )
-    else:
-        chart_long["Error"] = 0.0
+            main_chart = base.mark_line(strokeWidth=3.0, point=alt.OverlayMarkDef(size=95, filled=True))
+            use_error = error_method != "None"
 
-    chart_long["y_low"] = chart_long["Value"] - chart_long["Error"]
-    chart_long["y_high"] = chart_long["Value"] + chart_long["Error"]
-
-    y_candidates = chart_long["Value"]
-    if error_method != "None" and plot_type in {"Line + points", "Line + points (по Columns)", "Scatter", "Bar plot (по Time)", "Bar plot (по Columns)"}:
-        y_candidates = pd.concat([chart_long["y_low"], chart_long["y_high"]], ignore_index=True)
-    y_min = float(y_candidates.min()) if not y_candidates.empty else 0.0
-    y_max = float(y_candidates.max()) if not y_candidates.empty else 1.0
-    pad = (y_max - y_min) * 0.08 if y_max > y_min else 0.1
-    y_scale = alt.Scale(domain=[y_min - pad, y_max + pad], nice=True)
-
-    x_min = float(chart_long["Time"].min()) if not chart_long.empty else 0.0
-    x_max = float(chart_long["Time"].max()) if not chart_long.empty else 1.0
-    x_pad = (x_max - x_min) * 0.04 if x_max > x_min else 0.5
-    x_scale = alt.Scale(domain=[x_min - x_pad, x_max + x_pad], nice=True)
-    cap_half_width = max((x_max - x_min) * 0.006, 0.02)
-    chart_long["x_left"] = chart_long["Time"] - cap_half_width
-    chart_long["x_right"] = chart_long["Time"] + cap_half_width
-
-    if plot_type == "Scatter":
-        chart = (
-            alt.Chart(chart_long)
-            .mark_point(filled=True, size=130, opacity=0.95)
-            .encode(
+            if use_error:
+                error_chart = alt.Chart(by_col).mark_rule(opacity=0.55, strokeWidth=1.6).encode(
+                    x=alt.X("Column:N", sort=sorted_cols),
+                    y=alt.Y("y_low:Q"),
+                    y2=alt.Y2("y_high:Q"),
+                    color=alt.Color("TimeLabel:N"),
+                    detail=alt.Detail("File:N"),
+                )
+                chart = (error_chart + main_chart).interactive().properties(height=450)
+            else:
+                chart = main_chart.interactive().properties(height=450)
+        else:
+            base = alt.Chart(chart_long).encode(
                 x=alt.X("Time:Q", title="Time", scale=x_scale),
                 y=alt.Y("Value:Q", title="Aggregated value", scale=y_scale),
                 color=alt.Color("Column:N", title="Column"),
-                tooltip=["Time", "File", "Column", "Value"],
+                tooltip=["Time", "File", "Column", "Value", "Error"],
             )
-            .interactive()
-            .properties(height=450)
-        )
-    elif plot_type == "Bar plot (по Time)":
-        chart = (
-            alt.Chart(chart_long)
-            .mark_bar(opacity=0.88)
-            .encode(
-                x=alt.X("TimeLabel:N", title="Time", sort=time_sort_order),
-                y=alt.Y("Value:Q", title="Aggregated value", scale=y_scale, stack=None),
-                xOffset=alt.XOffset("Column:N"),
-                color=alt.Color("Column:N", title="Column"),
-                tooltip=["Time", "File", "Column", "Value"],
-            )
-            .properties(height=450)
-        )
-    elif plot_type == "Bar plot (по Columns)":
-        chart = (
-            alt.Chart(chart_long)
-            .mark_bar(opacity=0.88)
-            .encode(
-                x=alt.X("Column:N", title="Column", sort=sorted_cols),
-                y=alt.Y("Value:Q", title="Aggregated value", scale=y_scale, stack=None),
-                xOffset=alt.XOffset("TimeLabel:N"),
-                color=alt.Color("TimeLabel:N", title="Time"),
-                tooltip=["Time", "File", "Column", "Value"],
-            )
-            .properties(height=450)
-        )
-    elif plot_type == "Box plot (по Time)":
-        chart = (
-            alt.Chart(chart_long)
-            .mark_boxplot(extent="min-max", size=24)
-            .encode(
-                x=alt.X("TimeLabel:N", title="Time", sort=time_sort_order),
-                y=alt.Y("Value:Q", title="Aggregated value", scale=y_scale),
-                color=alt.Color("TimeLabel:N", title="Time"),
-                tooltip=["Time", "Value"],
-            )
-            .properties(height=460)
-        )
-    elif plot_type == "Box plot (по Columns)":
-        chart = (
-            alt.Chart(chart_long)
-            .mark_boxplot(extent="min-max", size=24)
-            .encode(
-                x=alt.X("Column:N", title="Column", sort=sorted_cols),
-                y=alt.Y("Value:Q", title="Aggregated value", scale=y_scale),
-                color=alt.Color("Column:N", title="Column"),
-                tooltip=["Column", "Value"],
-            )
-            .properties(height=460)
-        )
-    elif plot_type == "Violin plot (по Time)":
-        if chart_long.empty:
-            st.warning("No data available for violin plot")
-            return
 
-        violin_base = (
-            alt.Chart(chart_long)
-            .transform_density(
-                "Value",
-                as_=["Value", "Density"],
-                groupby=["TimeLabel"],
-            )
-            .mark_area(orient="horizontal", opacity=0.62, color="#ff6ab6")
-            .encode(
-                y=alt.Y("Value:Q", title="Aggregated value", scale=y_scale),
-                x=alt.X("Density:Q", stack="center", axis=None),
-            )
+            main_chart = base.mark_line(strokeWidth=3.0, point=alt.OverlayMarkDef(size=95, filled=True))
+            use_error = error_method != "None"
+
+            if use_error:
+                error_chart = alt.Chart(chart_long).mark_rule(opacity=0.55, strokeWidth=1.6).encode(
+                    x=alt.X("Time:Q", scale=x_scale),
+                    y=alt.Y("y_low:Q"),
+                    y2=alt.Y2("y_high:Q"),
+                    color=alt.Color("Column:N"),
+                )
+                whisker_low = alt.Chart(chart_long).mark_rule(opacity=0.7, strokeWidth=1.4).encode(
+                    x=alt.X("x_left:Q", scale=x_scale),
+                    x2=alt.X2("x_right:Q"),
+                    y=alt.Y("y_low:Q"),
+                    color=alt.Color("Column:N"),
+                )
+                whisker_high = alt.Chart(chart_long).mark_rule(opacity=0.7, strokeWidth=1.4).encode(
+                    x=alt.X("x_left:Q", scale=x_scale),
+                    x2=alt.X2("x_right:Q"),
+                    y=alt.Y("y_high:Q"),
+                    color=alt.Color("Column:N"),
+                )
+                chart = (error_chart + whisker_low + whisker_high + main_chart).interactive().properties(height=450)
+            else:
+                chart = main_chart.interactive().properties(height=450)
+
+        st.altair_chart(chart, use_container_width=True)
+        plot_display_df = plot_df[["Time", *available_plot_columns]].copy()
+        plot_display_df["Time"] = plot_display_df["Time"].map(_format_time_label)
+        st.dataframe(_gradient_style(plot_display_df, color_scale_mode, color_palette), width="stretch")
+
+        st.subheader("Export")
+        report_sheets = {
+            "Aggregated table": combined_display_df,
+            "Statistical analysis": stat_table,
+            "T-test analysis": ttest_df,
+            "Pairwise T-test p-values": pairwise_matrix_df,
+            "Outlier log": removed_df_export,
+            "Outlier statistics": outlier_stats_df,
+            "Plot data": plot_display_df,
+        }
+        config = _capture_analysis_config()
+        report_sheets.update(provenance_sheets(config))
+        report_bytes = _build_excel_report(report_sheets)
+        st.download_button(
+            "Export report.xlsx",
+            data=report_bytes,
+            file_name="plate_master_report.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
-        chart = violin_base.facet(
-            column=alt.Column("TimeLabel:N", title="Time", sort=time_sort_order, header=alt.Header(labelAngle=0)),
-            columns=4,
-        ).properties(height=180, width=80)
-    elif plot_type == "Violin plot (по Columns)":
-        chart = (
-            alt.Chart(chart_long)
-            .transform_density(
-                "Value",
-                as_=["Value", "Density"],
-                groupby=["Column"],
-            )
-            .mark_area(orient="horizontal", opacity=0.62)
-            .encode(
-                y=alt.Y("Value:Q", title="Aggregated value", scale=y_scale),
-                x=alt.X("Density:Q", stack="center", axis=None),
-                color=alt.Color("Column:N", title="Column"),
-                column=alt.Column("Column:N", title="Column", sort=sorted_cols, spacing=10),
-            )
-            .properties(height=440)
-        )
-    elif plot_type == "Line + points (по Columns)":
-        by_col = chart_long.copy()
-        by_col["Column"] = by_col["Column"].astype(str)
-
-        base = alt.Chart(by_col).encode(
-            x=alt.X("Column:N", title="Column", sort=sorted_cols),
-            y=alt.Y("Value:Q", title="Aggregated value", scale=y_scale),
-            color=alt.Color("TimeLabel:N", title="Time"),
-            detail=alt.Detail("File:N"),
-            tooltip=["TimeLabel", "File", "Column", "Value", "Error"],
-        )
-
-        main_chart = base.mark_line(strokeWidth=3.0, point=alt.OverlayMarkDef(size=95, filled=True))
-        use_error = error_method != "None"
-
-        if use_error:
-            error_chart = alt.Chart(by_col).mark_rule(opacity=0.55, strokeWidth=1.6).encode(
-                x=alt.X("Column:N", sort=sorted_cols),
-                y=alt.Y("y_low:Q"),
-                y2=alt.Y2("y_high:Q"),
-                color=alt.Color("TimeLabel:N"),
-                detail=alt.Detail("File:N"),
-            )
-            chart = (error_chart + main_chart).interactive().properties(height=450)
-        else:
-            chart = main_chart.interactive().properties(height=450)
-    else:
-        base = alt.Chart(chart_long).encode(
-            x=alt.X("Time:Q", title="Time", scale=x_scale),
-            y=alt.Y("Value:Q", title="Aggregated value", scale=y_scale),
-            color=alt.Color("Column:N", title="Column"),
-            tooltip=["Time", "File", "Column", "Value", "Error"],
-        )
-
-        main_chart = base.mark_line(strokeWidth=3.0, point=alt.OverlayMarkDef(size=95, filled=True))
-        use_error = error_method != "None"
-
-        if use_error:
-            error_chart = alt.Chart(chart_long).mark_rule(opacity=0.55, strokeWidth=1.6).encode(
-                x=alt.X("Time:Q", scale=x_scale),
-                y=alt.Y("y_low:Q"),
-                y2=alt.Y2("y_high:Q"),
-                color=alt.Color("Column:N"),
-            )
-            whisker_low = alt.Chart(chart_long).mark_rule(opacity=0.7, strokeWidth=1.4).encode(
-                x=alt.X("x_left:Q", scale=x_scale),
-                x2=alt.X2("x_right:Q"),
-                y=alt.Y("y_low:Q"),
-                color=alt.Color("Column:N"),
-            )
-            whisker_high = alt.Chart(chart_long).mark_rule(opacity=0.7, strokeWidth=1.4).encode(
-                x=alt.X("x_left:Q", scale=x_scale),
-                x2=alt.X2("x_right:Q"),
-                y=alt.Y("y_high:Q"),
-                color=alt.Color("Column:N"),
-            )
-            chart = (error_chart + whisker_low + whisker_high + main_chart).interactive().properties(height=450)
-        else:
-            chart = main_chart.interactive().properties(height=450)
-
-    st.altair_chart(chart, use_container_width=True)
-    plot_display_df = plot_df[["Time", *available_plot_columns]].copy()
-    plot_display_df["Time"] = plot_display_df["Time"].map(_format_time_label)
-    st.dataframe(_gradient_style(plot_display_df, color_scale_mode, color_palette), width="stretch")
-
-    st.subheader("Export")
-    report_sheets = {
-        "Aggregated table": combined_display_df,
-        "Statistical analysis": stat_table,
-        "T-test analysis": ttest_df,
-        "Pairwise T-test p-values": pairwise_matrix_df,
-        "Outlier log": removed_df_export,
-        "Outlier statistics": outlier_stats_df,
-        "Plot data": plot_display_df,
-    }
-    report_bytes = _build_excel_report(report_sheets)
-    st.download_button(
-        "Export report.xlsx",
-        data=report_bytes,
-        file_name="plate_master_report.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
+    finally:
+        _render_settings_download(settings_download_slot)
 
 
 

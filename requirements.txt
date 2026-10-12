@@ -1,4 +1,4 @@
-streamlit
+streamlit>=1.49
 pandas
 numpy
 altair
@@ -6,3 +6,4 @@ matplotlib
 openpyxl
 xlrd
 python-calamine
+scipy>=1.11

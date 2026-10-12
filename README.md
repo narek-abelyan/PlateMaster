@@ -58,7 +58,6 @@ Available aggregation methods:
 
 | Method | Purpose |
 | --- | --- |
-| None | keep values without aggregation |
 | Mean | average value |
 | Median | median value |
 | Min | minimum value |
@@ -87,9 +86,9 @@ PlateMaster calculates:
 - SEM;
 - MAD;
 - min/max;
-- approximate 95% confidence interval;
+- Student-t 95% confidence interval for the mean (bounds and half-width);
 - IQR/2;
-- approximate p-value for mean different from zero;
+- two-sided one-sample Student t-test for a mean different from zero;
 - Welch two-sample t-test between selected groups;
 - pairwise p-value matrix across time/metric combinations.
 
@@ -107,7 +106,7 @@ Charts are built with **Altair** and are designed for quick visual inspection:
 - Violin plot by time;
 - Violin plot by columns.
 
-Optional error bars can display standard deviation, SEM, 95% CI, IQR/2, or MAD.
+Optional error bars can display standard deviation, SEM, 95% CI, IQR/2, or MAD. SEM and 95% CI require Mean aggregation.
 
 ---
 
@@ -190,7 +189,7 @@ pip install -r requirements.txt
 If there is no `requirements.txt`, install the main dependencies manually:
 
 ```bash
-pip install streamlit pandas numpy altair matplotlib openpyxl xlrd python-calamine
+pip install streamlit pandas numpy scipy altair matplotlib openpyxl xlrd python-calamine
 ```
 
 Optional, but useful for old or problematic `.xls` files: install **LibreOffice** so PlateMaster can attempt automatic conversion to `.xlsx`.
@@ -260,7 +259,17 @@ Select:
 
 ### 5. Save or load presets
 
-Presets store frequently used analysis settings, including selected rows, columns, aggregation mode, filtering settings, chart options, and color options.
+Presets now include the plate-group map, selected rows/columns, aggregation and outlier settings, chart/color choices, and the selected descriptive-statistics and t-test groups.
+
+1. Load your spreadsheets, choose the settings and (if needed) fill the plate-group grid.
+2. Click **Run**, then choose the statistics, comparison groups and plot options to save.
+3. Click **Download settings.json**. Keep this file **and the original spreadsheets**; the JSON does not embed raw data.
+4. In a new session, load the spreadsheets first. Choose the JSON under **Import analysis settings (.json)** and click **Apply imported settings**.
+5. Review the input/environment check, then click **Run**. Matching inputs and settings reproduce the calculation; changed files or software produce a warning. Missing selected rows/columns or invalid settings are rejected without partially applying them.
+
+**Save preset now / Apply preset** remain shortcuts within the current session. Download JSON to preserve a preset across restarts. Import does not silently start an analysis. Settings using the removed `None` aggregation are rejected; choose a supported aggregation and save a new file.
+
+Input records contain original-file SHA-256 checksums, parsed-table checksums and the currently inferred filename times. Time is still extracted from filenames; its unit is recorded as unspecified. JSON saving does not add a new time-entry feature.
 
 ### 6. Run analysis
 
@@ -315,13 +324,24 @@ The app computes several metrics that can be used in tables or chart error bars:
 
 - standard deviation;
 - standard error of the mean;
-- approximate 95% confidence interval;
+- Student-t 95% confidence interval for the mean (bounds and half-width);
 - IQR/2;
 - MAD.
 
 ### T-tests
 
-PlateMaster uses Welch-style two-sample t-test calculations for comparing groups. The p-values are approximate and should be interpreted as quick exploratory analysis rather than a substitute for a full statistical workflow.
+PlateMaster uses `scipy.stats.ttest_ind(..., equal_var=False)` for the two-sided Welch test. Both the selected-group result and the pairwise matrix use the same calculation and the t distribution with Welch degrees of freedom. The mean-versus-zero result uses `scipy.stats.ttest_1samp`.
+
+- Missing/non-numeric observations are omitted; `n` counts available values. Infinite values are rejected.
+- Sample SD uses `ddof=1`; SEM is SD / sqrt(n). The 95% CI half-width is `t.ppf(0.975, n-1) * SEM`, and bounds are `mean ± half-width`. Every aggregation layout uses this definition.
+- With fewer than two observations, SD, SEM, confidence intervals and inferential p-values are unavailable (`NaN` / blank in Excel), not falsely reported as zero.
+- A constant one-sample group, or two Welch groups that both have zero sample variance, receives an undefined-test status and no p-value. A single constant group compared with a variable group is supported. For a constant sample with n ≥ 2 the calculated mean interval collapses to its observed mean; this is not evidence that the underlying population has zero uncertainty.
+- SEM and 95% CI chart options are available only with **Mean** aggregation. They describe uncertainty of a mean, not a sum, median or extreme. Undefined error bars are omitted.
+- Tests assume independent observations. Technical wells from one sample are not automatically independent biological replicates. Pairwise p-values are still **unadjusted** for multiple testing.
+
+Numerical checks: `[1, 2]` versus `[4, 5]` gives Welch p = **0.0513167019494862**; `[1, 2]` gives a mean-CI half-width of **6.353102368087347**. These differ deliberately from the old normal approximation.
+
+The `None` aggregation has been removed in all layouts. `None` remains available to disable outlier filtering or chart error bars. Other aggregation functions are unchanged; `Std` aggregation still uses `ddof=0`.
 
 ---
 
@@ -349,10 +369,17 @@ The export button creates **`plate_master_report.xlsx`** with multiple sheets:
 | Aggregated table | Final combined table across files. |
 | Statistical analysis | Descriptive statistics for the selected row/column combination. |
 | T-test analysis | Welch t-test comparison between selected groups. |
-| Pairwise T-test p-values | Matrix of approximate pairwise p-values. |
+| Pairwise T-test p-values | Matrix of unadjusted Welch p-values. |
 | Outlier log | Removed values with file, time, row, column, and value. |
 | Outlier statistics | Removal counts and percentages. |
 | Plot data | Data used to generate the selected chart. |
+| Analysis settings | All effective analysis, chart and statistical-selection settings. |
+| Plate groups | Saved row/column/group map. |
+| Input files | Original-file and parsed-table SHA-256 checksums, names and inferred times. |
+| Software versions | Application version, Git revision, modified-tree flag, actual source checksums, Python and libraries. |
+| Settings JSON | Exact reloadable JSON, split into numbered parts to respect Excel cell limits. |
+
+To recover JSON from Excel, join the `JSON` cells in `Settings JSON` in ascending `Part` order, then save as UTF-8 `.json`. Source checksums identify local code changes even before a new Git commit is made.
 
 ---
 
@@ -360,12 +387,26 @@ The export button creates **`plate_master_report.xlsx`** with multiple sheets:
 
 ```text
 PlateMaster1.2.py   # Main Streamlit application and analysis logic
+analysis_settings.py # Settings validation, JSON and provenance
+tests/              # Numerical, settings and Streamlit regression tests
+requirements-dev.txt # Dependencies for running tests
 requirements.txt    # Python dependencies
 README.md           # English and Russian documentation
 LICENSE             # Full MIT License text
 ```
 
-The current implementation is contained in a single Python script. This makes the project easy to run, copy, and deploy, while still keeping data loading, cleaning, aggregation, statistics, plotting, and export logic together.
+The Streamlit entry point remains `PlateMaster1.2.py`. Settings validation and provenance are kept in `analysis_settings.py`; this revision does not perform a full architectural refactor. The development version is identified as `1.3.0-dev` inside the app and exported settings.
+
+### Run the regression checks
+
+Tested locally on Linux with Python 3.13.12, Streamlit 1.63.0, pandas 2.3.3, SciPy 1.17.1, openpyxl 3.1.5, xlrd 2.0.2 and python-calamine 0.8.2. These are recorded test-environment versions, not a claim that all platforms have been validated. SciPy ≥ 1.11 and Streamlit ≥ 1.49 are required for APIs used here.
+
+```bash
+python -m pip install -r requirements-dev.txt
+python -m pytest -q
+```
+
+Tests cover known Welch/CI results, missing and degenerate samples, every aggregation layout, rejected settings, saved plate groups, changed-input detection, named presets, fresh-session JSON replay, and Excel provenance. Interface tests simulate the uploaded JSON bytes because Streamlit AppTest does not provide a browser file-picker API.
 
 ---
 
@@ -420,9 +461,9 @@ Check that:
 ## ⚠️ Notes and limitations
 
 - The app is optimized for exploratory plate analysis and fast reporting.
-- Approximate p-values are intended for quick comparison and should be validated for publication-grade statistical analysis.
+- Correct t-test calculations do not replace checking independence, study design and the effect of multiple comparisons.
 - Very large Excel or ZIP uploads may be limited by Streamlit server settings.
-- Presets are stored in Streamlit session state, so they may reset when the session restarts.
+- Named presets are session-local; download settings JSON and keep the original files for use after restart.
 - The first column of every input table is treated as the row identifier.
 
 ---
@@ -494,7 +535,6 @@ PlateMaster умеет работать с разными источниками
 
 | Метод | Назначение |
 | --- | --- |
-| None | оставить значения без агрегации |
 | Mean | среднее значение |
 | Median | медиана |
 | Min | минимум |
@@ -523,9 +563,9 @@ PlateMaster рассчитывает:
 - SEM;
 - MAD;
 - min/max;
-- приблизительный 95% доверительный интервал;
+- 95% доверительный интервал среднего по t-распределению (границы и полуширина);
 - IQR/2;
-- приблизительный p-value для отличия среднего от нуля;
+- двусторонний одновыборочный t-тест для отличия среднего от нуля;
 - Welch two-sample t-test между выбранными группами;
 - матрицу попарных p-value для комбинаций времени и метрик.
 
@@ -543,7 +583,7 @@ PlateMaster рассчитывает:
 - Violin plot by time;
 - Violin plot by columns.
 
-Для error bars можно выбрать standard deviation, SEM, 95% CI, IQR/2 или MAD.
+Для error bars можно выбрать standard deviation, SEM, 95% CI, IQR/2 или MAD. SEM и 95% CI доступны только при агрегации Mean.
 
 ---
 
@@ -626,7 +666,7 @@ pip install -r requirements.txt
 Если файла `requirements.txt` нет, установите основные зависимости вручную:
 
 ```bash
-pip install streamlit pandas numpy altair matplotlib openpyxl xlrd python-calamine
+pip install streamlit pandas numpy scipy altair matplotlib openpyxl xlrd python-calamine
 ```
 
 Опционально установите **LibreOffice**, если нужно открывать старые или повреждённые `.xls` файлы.
@@ -696,7 +736,17 @@ python PlateMaster1.2.py
 
 ### 5. Сохраните пресет
 
-Presets помогают сохранить часто используемые настройки: строки, столбцы, режим агрегации, фильтрацию, тип графика и цветовую палитру.
+Пресет сохраняет карту групп лунок, выбранные строки и столбцы, агрегацию, фильтры, оформление графиков, а также выбранные группы для описательной статистики и t-теста.
+
+1. Загрузите таблицы, настройте анализ и при необходимости заполните карту групп.
+2. Нажмите **Run**, затем выберите статистику, сравниваемые группы и параметры графика.
+3. Нажмите **Download settings.json**. Сохраните JSON **вместе с исходными таблицами**: сами измерения в JSON не включаются.
+4. В новой сессии сначала загрузите таблицы. Выберите JSON в **Import analysis settings (.json)** и нажмите **Apply imported settings**.
+5. Проверьте сообщение о файлах и окружении, затем нажмите **Run**. При изменении файлов или версий программа предупреждает, что это не точное повторение. Отсутствие нужных строк/столбцов и некорректные настройки приводят к отказу от загрузки без частичного применения.
+
+**Save preset now / Apply preset** работают внутри текущей сессии. Для хранения после перезапуска скачайте JSON. Импорт не запускает расчёт автоматически. Настройки с удалённой агрегацией `None` отклоняются: выберите поддерживаемую функцию и сохраните новый файл.
+
+В сведения о входах входят контрольные суммы SHA-256 исходных файлов, контрольные суммы прочитанных таблиц и время, извлечённое из имени. Единицы времени пока не задаются и отмечаются как неизвестные. Сохранение JSON не меняет существующий способ определения времени.
 
 ### 6. Запустите расчёт
 
@@ -749,13 +799,24 @@ A1, A2, B1, B2
 
 - Standard deviation;
 - Standard error of the mean;
-- Approximate 95% CI;
+- 95% CI for the mean using Student’s t distribution;
 - IQR/2;
 - MAD.
 
 ### T-tests
 
-PlateMaster использует Welch-style two-sample t-test для сравнения групп. P-values являются приблизительными и подходят для exploratory analysis; для публикационных выводов рекомендуется отдельная статистическая проверка.
+Для двустороннего теста Уэлча используется `scipy.stats.ttest_ind(..., equal_var=False)`. Отдельное сравнение и попарная матрица используют один расчёт с t-распределением и степенями свободы Уэлча. Для сравнения среднего с нулём используется `scipy.stats.ttest_1samp`.
+
+- Пропущенные и нечисловые наблюдения исключаются; `n` отражает число доступных значений. Бесконечные значения отклоняются.
+- Выборочное SD рассчитывается с `ddof=1`; SEM = SD / sqrt(n). Полуширина 95% интервала среднего равна `t.ppf(0.975, n-1) * SEM`, границы — `mean ± полуширина`. Формула одинакова для всех способов группировки.
+- При n < 2 SD, SEM, доверительный интервал и p-value недоступны (`NaN` / пустая ячейка в Excel), а не равны нулю.
+- Для одной постоянной выборки и для двух групп Уэлча с нулевой дисперсией в обеих группах возвращается пояснение и неопределённый p-value. Сравнение постоянной группы с переменной поддерживается. При n ≥ 2 интервал постоянной выборки сводится к наблюдаемому среднему; это не доказывает отсутствие неопределённости в исходной популяции.
+- SEM и 95% CI на графиках доступны только для **Mean**. Это погрешность среднего, а не суммы, медианы или экстремума. Неопределённые полосы погрешности не рисуются.
+- Тесты предполагают независимые наблюдения. Технические лунки одной пробы не становятся автоматически независимыми биологическими повторами. Попарные p-value пока **не корректируются** на множество сравнений.
+
+Контрольные числа: для `[1, 2]` и `[4, 5]` p-value Уэлча = **0,0513167019494862**; для `[1, 2]` полуширина доверительного интервала среднего = **6,353102368087347**. Отличие от прежнего нормального приближения ожидаемо.
+
+Агрегация `None` удалена во всех режимах. Вариант `None` для отключения фильтра выбросов и полос погрешности сохранён. Остальные агрегации не менялись; `Std` по-прежнему использует `ddof=0`.
 
 ---
 
@@ -785,6 +846,13 @@ PlateMaster использует Welch-style two-sample t-test для сравн
 | Outlier log | удалённые значения с файлом, временем, строкой, столбцом и значением |
 | Outlier statistics | количество и процент удалённых значений |
 | Plot data | данные, использованные для графика |
+| Analysis settings | настройки анализа, графиков и выбранных статистических сравнений |
+| Plate groups | карта строк, столбцов и групп лунок |
+| Input files | имена, SHA-256 исходных файлов и прочитанных таблиц, извлечённое время |
+| Software versions | версия программы, Git-ревизия, признак изменённого кода, его контрольные суммы, Python и библиотеки |
+| Settings JSON | точный JSON настроек, разбитый на части из-за ограничения размера ячейки Excel |
+
+Для восстановления JSON из Excel объедините ячейки `JSON` листа `Settings JSON` по возрастанию `Part` и сохраните результат в UTF-8 `.json`. Контрольные суммы исходников позволяют отличить локально изменённый код даже до нового Git-коммита.
 
 ---
 
@@ -792,12 +860,26 @@ PlateMaster использует Welch-style two-sample t-test для сравн
 
 ```text
 PlateMaster1.2.py   # Main Streamlit application and analysis logic
+analysis_settings.py # Settings validation, JSON and provenance
+tests/              # Numerical, settings and Streamlit regression tests
+requirements-dev.txt # Dependencies for running tests
 requirements.txt    # Python dependencies
 README.md           # English and Russian documentation
 LICENSE             # Full MIT License text
 ```
 
-Приложение сейчас находится в одном Python-файле, что упрощает запуск, перенос и деплой.
+Точка запуска остаётся `PlateMaster1.2.py`. Проверка настроек и сведения об анализе вынесены в `analysis_settings.py`; полного разделения архитектуры эта ревизия не выполняет. В приложении и настройках указана версия разработки `1.3.0-dev`.
+
+### Запуск проверок
+
+Локально проверено на Linux: Python 3.13.12, Streamlit 1.63.0, pandas 2.3.3, SciPy 1.17.1, openpyxl 3.1.5, xlrd 2.0.2 и python-calamine 0.8.2. Это сведения о проверенном окружении, а не заявление о проверке всех платформ. Используемые API требуют SciPy ≥ 1.11 и Streamlit ≥ 1.49.
+
+```bash
+python -m pip install -r requirements-dev.txt
+python -m pytest -q
+```
+
+Тесты проверяют известные результаты Уэлча и доверительных интервалов, пропуски и вырожденные выборки, все способы группировки, отказ от неверных настроек, сохранение групп, изменение входных файлов, пресеты, повторение JSON в новой сессии и состав Excel-отчёта. Загрузка JSON в тестах интерфейса имитируется на уровне полученных байтов: Streamlit AppTest не управляет браузерным выбором файла.
 
 ---
 
@@ -852,9 +934,9 @@ experiment_20.xlsx
 ## ⚠️ Ограничения
 
 - Приложение оптимизировано для exploratory plate analysis и быстрого отчёта.
-- Приблизительные p-values не заменяют полноценный статистический pipeline.
+- Корректный t-тест не заменяет проверку независимости наблюдений, дизайна опыта и множества сравнений.
 - Очень большие Excel/ZIP файлы могут быть ограничены настройками Streamlit-сервера.
-- Presets хранятся в session state и могут сбрасываться после перезапуска сессии.
+- Именованные пресеты остаются в текущей сессии; для работы после перезапуска скачайте JSON и сохраните исходные файлы.
 - Первый столбец каждого входного файла всегда считается идентификатором строки.
 
 ---
