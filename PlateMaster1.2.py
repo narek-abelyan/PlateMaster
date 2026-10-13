@@ -19,6 +19,13 @@ import streamlit as st
 import altair as alt
 from scipy import stats as scipy_stats
 
+import analysis_settings as _analysis_settings
+
+# A running Cloud process can retain the pre-pairwise module after a Git update.
+# Reload that older module before importing the newly added settings constant.
+if not hasattr(_analysis_settings, "MAX_PAIRWISE_GROUPS"):
+    importlib.reload(_analysis_settings)
+
 from analysis_settings import (
     APP_VERSION, DEFAULT_SETTINGS, ENUMS, LAYOUTS, MAX_PAIRWISE_GROUPS, PLOT_TYPES, dumps_config,
     input_record, loads_config, make_config, metric_names, provenance_sheets,

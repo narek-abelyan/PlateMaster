@@ -111,3 +111,24 @@ def test_pairwise_settings_old_files_and_selection_limit(config):
     config["settings"]["pairwise_groups"] = [str(i) for i in range(21)]
     with pytest.raises(ValueError, match="no more than 20"):
         validate_config(config)
+
+
+def test_startup_refreshes_settings_cached_before_pairwise_update():
+    """A hot deployment must refresh the old module, including its old schema defaults."""
+    import subprocess
+    import sys
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    code = """
+import runpy
+import analysis_settings as settings
+del settings.MAX_PAIRWISE_GROUPS
+settings.DEFAULT_SETTINGS.pop('pairwise_enabled')
+settings.DEFAULT_SETTINGS.pop('pairwise_groups')
+app = runpy.run_path('PlateMaster1.2.py', run_name='startup_regression')
+assert app['MAX_PAIRWISE_GROUPS'] == 20
+assert app['DEFAULT_SETTINGS']['pairwise_enabled'] is False
+assert app['DEFAULT_SETTINGS']['pairwise_groups'] == []
+"""
+    result = subprocess.run([sys.executable, "-c", code], cwd=root, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
