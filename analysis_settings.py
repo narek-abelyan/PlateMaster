@@ -157,7 +157,9 @@ def input_record(name: str, content: bytes | None, table: pd.DataFrame, time: fl
     return {"file": name, "sha256": hashlib.sha256(content).hexdigest() if content is not None else None,
             "size_bytes": len(content) if content is not None else None,
             "table_sha256": table_fingerprint(table), "time": time,
-            "time_source": "last numeric token in filename", "time_unit": "unspecified"}
+            "time_source": "last numeric token in filename", "time_unit": "unspecified",
+            "import_options": deepcopy(table.attrs.get("import_options", {})),
+            "import_warnings": list(table.attrs.get("import_warnings", []))}
 
 
 def software_record(directory: Path) -> dict:
@@ -202,6 +204,8 @@ def replay_warnings(saved: dict, current_inputs: list[dict], current_software: d
             messages.append(f"Input file changed: {name}")
         if old.get("table_sha256") != new.get("table_sha256"):
             messages.append(f"Parsed measurements changed: {name}")
+        if old.get("import_options", {}) != new.get("import_options", {}):
+            messages.append(f"Import choices changed: {name}")
         if old.get("time") != new.get("time"):
             messages.append(f"Filename time changed: {name}")
     for key in ("application_version", "python", "platform", "libraries", "source_sha256"):

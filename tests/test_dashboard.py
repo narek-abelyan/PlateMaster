@@ -205,3 +205,34 @@ def test_missing_selection_does_not_partially_apply_config(spreadsheets, monkeyp
     imported_settings(at, monkeypatch, dumps_config(config))
     assert at.selectbox(key="agg_name").value == "Mean"
     assert any("missing" in x.value for x in at.error)
+
+
+def test_analysis_failure_names_file_and_blocks_partial_report(spreadsheets, downloads):
+    # Exercise a real file-specific aggregation failure after successful import.
+    at = load_folder(spreadsheets)
+    broken = at.session_state["loaded_tables"]
+    broken["plate_10.xlsx"] = broken["plate_10.xlsx"].drop(columns="2")
+    at.session_state["loaded_tables"] = broken
+    at.selectbox(key="agg_layout_mode").set_value("By original rows").run()
+    click(at, "Run")
+    assert any("plate_10.xlsx" in x.value and "Analysis stopped" in x.value for x in at.error)
+    assert "Export report.xlsx" not in downloads
+
+
+def test_import_controls_and_each_file_preview(tmp_path):
+    output = tmp_path / "plate_0.xlsx"
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        pd.DataFrame({"Info": ["Actual Temperature:"]*2, "Value": [37, 37]}).to_excel(writer, sheet_name="Metadata", index=False)
+        pd.DataFrame({"Well": ["A", "B"], "1": [1, 2]}).to_excel(writer, sheet_name="Readings", startrow=2, index=False)
+    at = load_folder(tmp_path)
+    assert any("Duplicate row identifiers" in x.value for x in at.warning)
+    next(x for x in at.text_input if x.label.startswith("Worksheet name")).set_value("Readings").run()
+    next(x for x in at.number_input if x.label.startswith("Header row")).set_value(3).run()
+    click(at, "Load folder")
+    assert at.session_state["loaded_tables"]["plate_0.xlsx"]["1"].tolist() == [1, 2]
+    assert at.selectbox(key="preview_file").options == ["plate_0.xlsx"]
+    pd.DataFrame({"Well": ["A", "B"], "1": [3, 4]}).to_excel(tmp_path / "plate_10.xlsx", sheet_name="Readings", startrow=2, index=False)
+    click(at, "Load folder")
+    at.selectbox(key="preview_file").set_value("plate_10.xlsx").run()
+    assert not at.exception
+    assert at.dataframe[0].value["1"].tolist() == [3, 4]

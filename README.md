@@ -143,6 +143,12 @@ Example:
 
 During loading, the app renames the first column internally to `row_id` and converts numeric measurement columns automatically.
 
+Open **Import options** before loading to select the worksheet by number (starting at 1) or exact name, and the header row (starting at 1). These choices apply to the whole batch. The default reads the first worksheet and first row. Reload files after changing these options.
+
+By default, input must have unique plate-row letters (A–AF) and numbered measurement columns (1–48). **Auto / partial table** allows subsets; choose an **Expected plate** size to require the complete matrix and valid coordinates. For sample names, full well labels such as A1, or other measurement-column labels, explicitly enable **Allow custom table labels** and check the warning and preview. Duplicate/missing row identifiers and infinite measurements are rejected. Purely textual auxiliary columns, discarded empty measurements, and non-numeric cells are reported. Structural checks cannot determine the biological meaning of valid numeric cells.
+
+Use **Preview file** to inspect each accepted table before analysis. Import errors identify skipped files. If a loaded file fails during aggregation, analysis stops with the filename and error, without exporting partial results. JSON settings and Excel reports record the import choices and warnings for each input; use those choices when reloading the original files.
+
 ### ⏱ Time extraction from filenames
 
 For cross-file time-course analysis, PlateMaster extracts the **last number from each filename** and uses it as `Time`.
@@ -621,6 +627,12 @@ PlateMaster ожидает таблицу, где:
 | B1 | 0.08 | 0.12 | 0.19 | 0.27 |
 
 При загрузке первый столбец внутренне переименовывается в `row_id`, а числовые столбцы автоматически конвертируются в числа.
+
+Перед загрузкой откройте **Import options**: укажите номер листа (с 1) или его точное имя и номер строки заголовка (с 1). Настройки общие для всей партии. По умолчанию читаются первый лист и первая строка; после изменения параметров загрузите файлы заново.
+
+По умолчанию нужны уникальные буквы строк планшета (A–AF) и номера столбцов (1–48). **Auto / partial table** допускает часть планшета; конкретный размер в **Expected plate** требует полной матрицы с правильными координатами. Для названий образцов, обозначений A1 и других заголовков явно включите **Allow custom table labels** и проверьте предупреждение и просмотр данных. Повторяющиеся и пустые идентификаторы строк, а также бесконечные значения отклоняются. Программа сообщает об исключённых текстовых служебных столбцах, пустых измерениях и нечисловых ячейках. Проверка структуры не определяет биологический смысл чисел.
+
+В **Preview file** можно просмотреть каждый принятый файл до анализа. Ошибки загрузки перечисляют пропущенные файлы. При ошибке агрегации программа показывает имя файла и причину и останавливается без экспорта частичных результатов. JSON и Excel сохраняют параметры импорта и предупреждения для каждого файла; используйте эти параметры при повторной загрузке исходных данных.
 
 ### ⏱ Извлечение времени из имени файла
 

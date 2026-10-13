@@ -89,11 +89,11 @@ def discover_excel_files(folder: str) -> list[Path]:
 
 
 
-def _read_spreadsheet_flexible_from_bytes(content: bytes, filename: str = "") -> pd.DataFrame:
+def _read_spreadsheet_flexible_from_bytes(content: bytes, filename: str = "", sheet_name: str | int = 0, header: int = 0) -> pd.DataFrame:
     """Read spreadsheet bytes using Excel engines, text fallbacks, then LibreOffice.
 
-    The filename selects reader order; Excel readers use their default first
-    sheet and header row. Return the parsed DataFrame, or raise ValueError
+    The filename selects reader order; sheet_name and header select the worksheet
+    and zero-based header row. Return the parsed DataFrame, or raise ValueError
     with reader diagnostics if all attempts fail."""
     errors: list[str] = []
     suffix = filename.lower().rsplit('.', 1)[-1] if '.' in filename else ""
@@ -101,16 +101,16 @@ def _read_spreadsheet_flexible_from_bytes(content: bytes, filename: str = "") ->
     engine_attempts = _available_excel_engines_for_suffix(suffix)
     for engine in engine_attempts:
         try:
-            return pd.read_excel(BytesIO(content), engine=engine)
+            return pd.read_excel(BytesIO(content), engine=engine, sheet_name=sheet_name, header=header)
         except Exception as exc:
             errors.append(f"{engine}: {exc}")
 
     # Fallback for instrument exports mislabeled as .xls but containing delimited text.
-    if not content.startswith(OLE_SIGNATURE):
+    if not content.startswith((OLE_SIGNATURE, b"PK")) and sheet_name == 0:
         text = content.decode("utf-8", errors="ignore")
-        for sep in ["   ", ";", ","]:
+        for sep in ["\t", "   ", ";", ","]:
             try:
-                frame = pd.read_csv(StringIO(text), sep=sep)
+                frame = pd.read_csv(StringIO(text), sep=sep, header=header)
                 if frame.shape[1] >= 2:
                     return frame
             except Exception as exc:
@@ -119,7 +119,7 @@ def _read_spreadsheet_flexible_from_bytes(content: bytes, filename: str = "") ->
     converted_xlsx = _try_libreoffice_convert_bytes_to_xlsx(content, filename or "input.xls")
     if converted_xlsx is not None:
         try:
-            return pd.read_excel(BytesIO(converted_xlsx), engine="openpyxl")
+            return pd.read_excel(BytesIO(converted_xlsx), engine="openpyxl", sheet_name=sheet_name, header=header)
         except Exception as exc:
             errors.append(f"libreoffice-convert: {exc}")
 
@@ -130,82 +130,95 @@ def _read_spreadsheet_flexible_from_bytes(content: bytes, filename: str = "") ->
     )
 
 
-def _read_spreadsheet_flexible_from_path(path: Path) -> pd.DataFrame:
-    """Read a path using Excel engines, text fallbacks, then LibreOffice conversion.
+def _read_spreadsheet_flexible_from_path(path: Path, sheet_name: str | int = 0, header: int = 0) -> pd.DataFrame:
+    """Read a path with the same explicit worksheet/header rules as uploaded bytes."""
+    return _read_spreadsheet_flexible_from_bytes(path.read_bytes(), path.name, sheet_name, header)
 
-    Return the parsed DataFrame before sanitization. Excel readers use their
-    default first sheet and header row. Raise ValueError if all readers fail."""
-    errors: list[str] = []
-    suffix = path.suffix.lower()
-    engine_attempts = _available_excel_engines_for_suffix(suffix)
 
-    for engine in engine_attempts:
-        try:
-            return pd.read_excel(path, engine=engine)
-        except Exception as exc:
-            errors.append(f"{engine}: {exc}")
+def sanitize_table(frame: pd.DataFrame, allow_custom: bool = False,
+                   plate_shape: tuple[int, int] | None = None) -> pd.DataFrame:
+    """Validate a plate matrix before dropping missing measurements.
 
-    for sep in ["   ", ";", ","]:
-        try:
-            frame = pd.read_csv(path, sep=sep)
-            if frame.shape[1] >= 2:
-                return frame
-        except Exception as exc:
-            errors.append(f"csv sep={sep!r}: {exc}")
-
-    converted_xlsx = _try_libreoffice_convert_bytes_to_xlsx(path.read_bytes(), path.name)
-    if converted_xlsx is not None:
-        try:
-            return pd.read_excel(BytesIO(converted_xlsx), engine="openpyxl")
-        except Exception as exc:
-            errors.append(f"libreoffice-convert: {exc}")
-
-    raise ValueError(
-        f"Unable to parse file {path.name}. "
-        "Install python-calamine and optionally LibreOffice for conversion. Attempts: "
-        + " | ".join(errors)
-    )
-
-def sanitize_table(frame: pd.DataFrame) -> pd.DataFrame:
-    """Return row identifiers and numeric measurement columns from a parsed table.
-
-    Rename the first column to row_id and trim its string labels. Coerce
-    non-numeric measurements to NaN; drop columns and rows with no numeric
-    measurements. Raise ValueError when no usable numeric table remains."""
-    if frame.empty:
-        raise ValueError("Empty table")
-
-    first_col = frame.columns[0]
-    frame = frame.rename(columns={first_col: "row_id"})
-    frame["row_id"] = frame["row_id"].astype(str).str.strip()
-    frame = frame[frame["row_id"].str.len() > 0].copy()
-
-    numeric_cols: list[str] = []
-    for column in frame.columns[1:]:
-        numeric_series = pd.to_numeric(frame[column], errors="coerce")
-        if numeric_series.notna().any():
-            col_name = str(column).strip()
-            frame[col_name] = numeric_series
-            numeric_cols.append(col_name)
-
-    if not numeric_cols:
-        raise ValueError("No numeric columns detected")
-
-    result = frame[["row_id", *numeric_cols]].dropna(how="all", subset=numeric_cols)
-    if result.empty:
-        raise ValueError("No numeric rows detected")
+    Reject missing/duplicate row IDs, non-finite values and unexpected dimensions.
+    Non-plate labels require explicit opt-in and produce a retained warning.
+    Empty measurement rows/columns and non-numeric cells are reported in attrs.
+    """
+    if frame.empty or frame.shape[1] < 2:
+        raise ValueError("No measurement table found; check the worksheet and header row")
+    frame = frame.copy()
+    frame.columns = ["row_id", *[str(c).strip() for c in frame.columns[1:]]]
+    if frame.columns.duplicated().any():
+        raise ValueError("Duplicate column identifiers; check the header row")
+    # Completely empty rows are harmless; a numeric row without an ID is not.
+    frame = frame.dropna(how="all")
+    labels = frame["row_id"].astype("string").str.strip()
+    if labels.isna().any() or labels.eq("").any():
+        raise ValueError("Missing row identifiers; check the worksheet and header row")
+    if labels.duplicated().any():
+        raise ValueError("Duplicate row identifiers (possibly instrument metadata): " +
+                         ", ".join(labels[labels.duplicated()].unique()[:5]))
+    frame["row_id"] = labels.astype(str)
+    warnings = []
+    # Ignore purely textual auxiliary columns (e.g. an OD unit column), but
+    # retain numbered empty wells when checking the expected plate dimensions.
+    auxiliary = [c for c in frame.columns[1:] if not re.fullmatch(r"[1-9][0-9]*", c)
+                 and not pd.to_numeric(frame[c], errors="coerce").notna().any()]
+    if auxiliary:
+        frame = frame.drop(columns=auxiliary)
+        warnings.append("Ignored non-measurement columns without numbers: " + ", ".join(auxiliary))
+    def row_number(label):
+        if not re.fullmatch(r"[A-Z]{1,2}", label):
+            return 0
+        value = 0
+        for char in label:
+            value = value * 26 + ord(char) - ord("A") + 1
+        return value
+    row_numbers = [row_number(x) for x in frame["row_id"]]
+    columns = list(frame.columns[1:])
+    column_numbers = [int(c) if re.fullmatch(r"[1-9][0-9]*", c) else 0 for c in columns]
+    max_rows, max_cols = plate_shape or (32, 48)
+    standard = (all(0 < r <= max_rows for r in row_numbers) and
+                all(0 < c <= max_cols for c in column_numbers))
+    if plate_shape and (frame.shape != (max_rows, max_cols + 1) or not standard):
+        raise ValueError(f"Expected a {max_rows} x {max_cols} plate with row letters and numbered columns; "
+                         f"found {len(frame)} rows and {len(columns)} measurement columns")
+    if not standard:
+        message = "Non-standard row/column labels or plate dimensions; numeric instrument metadata may be mistaken for measurements."
+        if not allow_custom:
+            raise ValueError(message + " Select the correct worksheet/header, or explicitly enable custom table labels after checking the file.")
+        warnings.append(message)
+    numeric = frame.iloc[:, 1:].apply(pd.to_numeric, errors="coerce")
+    if np.isinf(numeric.to_numpy(dtype=float)).any():
+        raise ValueError("Infinite measurement values are not supported")
+    invalid = int((frame.iloc[:, 1:].notna() & numeric.isna()).to_numpy().sum())
+    if invalid:
+        warnings.append(f"{invalid} non-numeric measurement cell(s) treated as missing.")
+    kept_columns = numeric.columns[numeric.notna().any()].tolist()
+    if not kept_columns:
+        raise ValueError("No numeric measurements; check the worksheet and header row")
+    keep_rows = numeric[kept_columns].notna().any(axis=1)
+    result = pd.concat([frame[["row_id"]], numeric[kept_columns]], axis=1).loc[keep_rows].copy()
+    dropped_rows, dropped_cols = len(frame) - len(result), len(columns) - len(kept_columns)
+    if dropped_rows or dropped_cols:
+        warnings.append(f"Removed {dropped_rows} row(s) and {dropped_cols} column(s) without numeric measurements.")
+    result.attrs["import_warnings"] = warnings
     return result
 
 
-def load_table_from_path(path: Path) -> pd.DataFrame:
-    """Read and sanitize a spreadsheet path; propagate parsing or validation errors."""
-    return sanitize_table(_read_spreadsheet_flexible_from_path(path))
+def load_table_from_path(path: Path, **options) -> pd.DataFrame:
+    """Read a path using the explicit import options supported by the byte reader."""
+    return load_table_from_bytes(path.read_bytes(), path.name, **options)
 
 
-def load_table_from_bytes(content: bytes, filename: str = "") -> pd.DataFrame:
-    """Read and sanitize uploaded bytes, using filename to choose reader order."""
-    return sanitize_table(_read_spreadsheet_flexible_from_bytes(content, filename))
-
+def load_table_from_bytes(content: bytes, filename: str = "", sheet_name: str | int = 0,
+                          header: int = 0, allow_custom: bool = False,
+                          plate_shape: tuple[int, int] | None = None) -> pd.DataFrame:
+    """Read and validate a spreadsheet; retain import choices for provenance."""
+    raw = _read_spreadsheet_flexible_from_bytes(content, filename, sheet_name, header)
+    result = sanitize_table(raw, allow_custom, plate_shape)
+    result.attrs["import_options"] = {"sheet": sheet_name, "header_row": header + 1,
+                                     "allow_custom": allow_custom, "plate_shape": plate_shape}
+    return result
 
 
 
@@ -778,6 +791,22 @@ def run_dashboard() -> None:
         st.header("1) Data source")
         source_mode = st.radio("Source", ["Server folder path", "Local PC upload"], index=1)
 
+        with st.expander("Import options"):
+            sheet_index = int(st.number_input("Worksheet number (1 = first)", min_value=1, value=1))
+            sheet_label = st.text_input("Worksheet name (optional; overrides number)")
+            header_row = int(st.number_input("Header row (1 = first)", min_value=1, value=1))
+            plate_format = st.selectbox("Expected plate", ["Auto / partial table", "6 (2 x 3)", "12 (3 x 4)",
+                                        "24 (4 x 6)", "48 (6 x 8)", "96 (8 x 12)",
+                                        "384 (16 x 24)", "1536 (32 x 48)"])
+            allow_custom = st.checkbox("Allow custom table labels (review possible metadata)", value=False)
+            st.caption("These choices apply to every file in this load. After changing them, load the files again. "
+                       "Auto accepts partial plate matrices; it does not verify a complete plate size.")
+        shapes = {"6 (2 x 3)": (2, 3), "12 (3 x 4)": (3, 4), "24 (4 x 6)": (4, 6),
+                  "48 (6 x 8)": (6, 8), "96 (8 x 12)": (8, 12),
+                  "384 (16 x 24)": (16, 24), "1536 (32 x 48)": (32, 48)}
+        import_options = dict(sheet_name=sheet_label.strip() or sheet_index - 1, header=header_row - 1,
+                              allow_custom=allow_custom, plate_shape=shapes.get(plate_format))
+
         if source_mode == "Server folder path":
             folder_path = st.text_input("Server folder path with Excel files", value="")
             load_folder_clicked = st.button("Load folder")
@@ -788,7 +817,7 @@ def run_dashboard() -> None:
                 for file in discover_excel_files(folder_path):
                     try:
                         content = file.read_bytes()
-                        loaded_tables[file.name] = load_table_from_bytes(content, file.name)
+                        loaded_tables[file.name] = load_table_from_bytes(content, file.name, **import_options)
                         records[file.name] = input_record(file.name, content, loaded_tables[file.name], _extract_time_from_filename(file.name))
                     except Exception as exc:
                         errors.append(f"{file.name}: {exc}")
@@ -819,7 +848,7 @@ def run_dashboard() -> None:
                         if uploaded.name in loaded_tables:
                             raise ValueError("Duplicate input filename; rename the file before loading it")
                         content = uploaded.getvalue()
-                        loaded_tables[uploaded.name] = load_table_from_bytes(content, uploaded.name)
+                        loaded_tables[uploaded.name] = load_table_from_bytes(content, uploaded.name, **import_options)
                         records[uploaded.name] = input_record(uploaded.name, content, loaded_tables[uploaded.name], _extract_time_from_filename(uploaded.name))
                     except Exception as exc:
                         errors.append(f"{uploaded.name}: {exc}")
@@ -836,7 +865,7 @@ def run_dashboard() -> None:
                                     if name in loaded_tables:
                                         raise ValueError("Duplicate input filename; rename the file before loading it")
                                     content = archive.read(member)
-                                    loaded_tables[name] = load_table_from_bytes(content, member)
+                                    loaded_tables[name] = load_table_from_bytes(content, member, **import_options)
                                     records[name] = input_record(name, content, loaded_tables[name], _extract_time_from_filename(name))
                                 except Exception as exc:
                                     errors.append(f"{member}: {exc}")
@@ -860,13 +889,16 @@ def run_dashboard() -> None:
 
     st.success(f"Loaded {len(loaded_tables)} Excel file(s)")
 
-    representative_loaded_name = sorted(loaded_tables.keys())[0]
-    st.header("Representative input table")
-    st.subheader(f"Source: {representative_loaded_name}")
-    st.dataframe(
-        _gradient_style(loaded_tables[representative_loaded_name], color_scale_mode, color_palette),
-        width="stretch",
-    )
+    st.header("Input preview")
+    for name, table in loaded_tables.items():
+        for message in table.attrs.get("import_warnings", []):
+            st.warning(f"{name}: {message}")
+    _prepare_selectbox("preview_file", sorted(loaded_tables))
+    preview_name = st.selectbox("Preview file", sorted(loaded_tables), key="preview_file")
+    preview = loaded_tables[preview_name]
+    st.caption(f"{len(preview)} rows x {len(preview.columns) - 1} measurement columns. "
+               f"Import: {preview.attrs.get('import_options', {})}. Check that these are the intended measurements.")
+    st.dataframe(_gradient_style(preview, color_scale_mode, color_palette), width="stretch")
 
     all_rows = sorted({row for table in loaded_tables.values() for row in table["row_id"].astype(str).tolist()})
     all_columns = _sort_columns_natural(sorted({str(c) for table in loaded_tables.values() for c in table.columns if c != "row_id"}))
@@ -996,6 +1028,7 @@ def run_dashboard() -> None:
         error_lookup: dict[tuple[str, str], dict[str, float]] = {}
         source_value_lookup: dict[tuple[str, str], list[float]] = {}
 
+        analysis_errors = []
         for name, table in loaded_tables.items():
             try:
                 filtered_for_stats = table[table["row_id"].isin(selected_rows)]
@@ -1049,8 +1082,13 @@ def run_dashboard() -> None:
                     source_value_lookup[(name, str(col_name))] = vals
                 for item in removed_rows:
                     removed_outliers_log.append({"Time": file_time, "file": name, **item})
-            except Exception:
-                continue
+            except Exception as exc:
+                analysis_errors.append(f"{name}: {exc}")
+
+        if analysis_errors:
+            st.error("Analysis stopped; no partial results will be exported. Fix these files or selections:\n- " +
+                     "\n- ".join(analysis_errors))
+            return
 
         if not aggregated_tables:
             st.error("No aggregated tables could be produced for the current selection")
