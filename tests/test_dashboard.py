@@ -236,3 +236,27 @@ def test_import_controls_and_each_file_preview(tmp_path):
     at.selectbox(key="preview_file").set_value("plate_10.xlsx").run()
     assert not at.exception
     assert at.dataframe[0].value["1"].tolist() == [3, 4]
+
+
+def test_optional_pairwise_selection_and_report(spreadsheets, downloads):
+    at = load_folder(spreadsheets)
+    click(at, "Run")
+    assert at.checkbox(key="pairwise_enabled").value is False
+    assert "Pairwise T-test p-values" not in pd.ExcelFile(BytesIO(downloads["Export report.xlsx"])).sheet_names
+    at.checkbox(key="pairwise_enabled").check().run()
+    assert not at.exception
+    assert at.multiselect(key="pairwise_groups").value == []
+    assert any("unadjusted" in x.value for x in at.warning)
+    choices = at.multiselect(key="pairwise_groups").options[:3]
+    at.multiselect(key="pairwise_groups").set_value(choices).run()
+    assert not at.exception
+    report = pd.read_excel(BytesIO(downloads["Export report.xlsx"]), sheet_name=None)
+    matrix = report["Pairwise T-test p-values"]
+    assert matrix.iloc[:, 0].tolist() == choices
+    assert int(matrix.iloc[:, 1:].notna().sum().sum()) == 3
+    assert "unadjusted" in report["Pairwise notes"].iloc[0, 0]
+    config = loads_config(downloads["Download settings.json"])
+    assert config["settings"]["pairwise_groups"] == choices
+    at.checkbox(key="pairwise_enabled").uncheck().run()
+    assert not at.exception
+    assert "Pairwise T-test p-values" not in pd.ExcelFile(BytesIO(downloads["Export report.xlsx"])).sheet_names

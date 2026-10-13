@@ -101,3 +101,21 @@ def test_every_layout_uses_student_t_uncertainty(app_module, layout):
 
 def test_removed_aggregation_is_not_offered(app_module):
     assert set(app_module.AGGREGATIONS) == {"Mean", "Median", "Min", "Max", "Std", "Sum"}
+
+
+def test_pairwise_upper_triangle_and_limit(app_module, monkeypatch):
+    groups = {"A": [1, 2], "B": [4, 5], "C": [2, 4, 6]}
+    original = app_module._welch_p_value
+    calls = []
+    def counted(a, b):
+        calls.append((a, b))
+        return original(a, b)
+    monkeypatch.setattr(app_module, "_welch_p_value", counted)
+    matrix = app_module._pairwise_p_values(groups)
+    assert len(calls) == 3
+    assert matrix.loc["A", "B"] == pytest.approx(0.0513167019494862)
+    assert matrix.loc["B", "A"] == matrix.loc["A", "A"] == ""
+    for invalid in ({"A": [1, 2]}, {str(i): [1, 2] for i in range(21)}):
+        with pytest.raises(ValueError, match="between 2 and 20"):
+            app_module._pairwise_p_values(invalid)
+    assert len(calls) == 3

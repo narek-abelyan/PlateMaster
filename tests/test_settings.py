@@ -97,3 +97,17 @@ def test_excel_contains_exact_reloadable_settings(app_module, config):
     assert loads_config("".join(parts).encode()) == config
     assert sheets["Plate groups"]["group"].tolist() == ["Контроль", "Контроль"]
     assert sheets["Input files"].iloc[0]["sha256"] == config["inputs"][0]["sha256"]
+
+
+def test_pairwise_settings_old_files_and_selection_limit(config):
+    old = deepcopy(config)
+    old["settings"].pop("pairwise_enabled")
+    old["settings"].pop("pairwise_groups")
+    restored = validate_config(old)
+    assert restored["settings"]["pairwise_enabled"] is False
+    assert restored["settings"]["pairwise_groups"] == []
+    config["settings"].update(pairwise_enabled=True, pairwise_groups=["0.0 | control", "10.0 | control"])
+    assert loads_config(dumps_config(config)) == config
+    config["settings"]["pairwise_groups"] = [str(i) for i in range(21)]
+    with pytest.raises(ValueError, match="no more than 20"):
+        validate_config(config)

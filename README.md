@@ -338,6 +338,9 @@ The app computes several metrics that can be used in tables or chart error bars:
 
 PlateMaster uses `scipy.stats.ttest_ind(..., equal_var=False)` for the two-sided Welch test. Both the selected-group result and the pairwise matrix use the same calculation and the t distribution with Welch degrees of freedom. The mean-versus-zero result uses `scipy.stats.ttest_1samp`.
 
+**Optional pairwise comparisons:** the matrix is off by default. Enable **Enable pairwise comparisons**, then explicitly select 2–20 time/metric groups (at most 190 tests). Only the upper triangle is filled; self-comparisons and the mirrored lower triangle are omitted. P-values are unadjusted for multiple comparisons; a warning is shown in the interface and included in the Excel report. No Holm or other multiplicity correction is applied. The enable flag and selected groups are saved in presets and JSON. Older JSON files load with this option off. The pairwise sheets are exported only when comparisons have been calculated.
+
+
 - Missing/non-numeric observations are omitted; `n` counts available values. Infinite values are rejected.
 - Sample SD uses `ddof=1`; SEM is SD / sqrt(n). The 95% CI half-width is `t.ppf(0.975, n-1) * SEM`, and bounds are `mean ± half-width`. Every aggregation layout uses this definition.
 - With fewer than two observations, SD, SEM, confidence intervals and inferential p-values are unavailable (`NaN` / blank in Excel), not falsely reported as zero.
@@ -375,7 +378,8 @@ The export button creates **`plate_master_report.xlsx`** with multiple sheets:
 | Aggregated table | Final combined table across files. |
 | Statistical analysis | Descriptive statistics for the selected row/column combination. |
 | T-test analysis | Welch t-test comparison between selected groups. |
-| Pairwise T-test p-values | Matrix of unadjusted Welch p-values. |
+| Pairwise T-test p-values | Optional upper-triangular matrix of unadjusted Welch p-values, with row labels. |
+| Pairwise notes | Interpretation and unadjusted-p-value warning; included with the matrix. |
 | Outlier log | Removed values with file, time, row, column, and value. |
 | Outlier statistics | Removal counts and percentages. |
 | Plot data | Data used to generate the selected chart. |
@@ -821,6 +825,8 @@ A1, A2, B1, B2
 
 Для двустороннего теста Уэлча используется `scipy.stats.ttest_ind(..., equal_var=False)`. Отдельное сравнение и попарная матрица используют один расчёт с t-распределением и степенями свободы Уэлча. Для сравнения среднего с нулём используется `scipy.stats.ttest_1samp`.
 
+**Необязательные попарные сравнения:** матрица выключена по умолчанию. Включите **Enable pairwise comparisons** и выберите от 2 до 20 комбинаций времени и метрики (не более 190 тестов). Заполняется только верхняя половина матрицы; диагональ и зеркальная нижняя половина остаются пустыми. P-value не скорректированы на множественные проверки: предупреждение есть в интерфейсе и Excel. Поправка Холма и другие поправки не применяются. Включение и выбор групп сохраняются в пресетах и JSON. Старые JSON загружаются с выключенной матрицей. Листы попарных сравнений экспортируются только после расчёта.
+
 - Пропущенные и нечисловые наблюдения исключаются; `n` отражает число доступных значений. Бесконечные значения отклоняются.
 - Выборочное SD рассчитывается с `ddof=1`; SEM = SD / sqrt(n). Полуширина 95% интервала среднего равна `t.ppf(0.975, n-1) * SEM`, границы — `mean ± полуширина`. Формула одинакова для всех способов группировки.
 - При n < 2 SD, SEM, доверительный интервал и p-value недоступны (`NaN` / пустая ячейка в Excel), а не равны нулю.
@@ -856,7 +862,8 @@ A1, A2, B1, B2
 | Aggregated table | итоговая агрегированная таблица по всем файлам |
 | Statistical analysis | descriptive statistics |
 | T-test analysis | Welch t-test между выбранными группами |
-| Pairwise T-test p-values | матрица попарных p-values |
+| Pairwise T-test p-values | верхняя половина матрицы нескорректированных p-value с подписями строк; только после включения и расчёта |
+| Pairwise notes | пояснение матрицы и предупреждение об отсутствии поправки |
 | Outlier log | удалённые значения с файлом, временем, строкой, столбцом и значением |
 | Outlier statistics | количество и процент удалённых значений |
 | Plot data | данные, использованные для графика |

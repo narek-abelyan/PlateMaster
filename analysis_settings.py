@@ -16,6 +16,7 @@ import pandas as pd
 APP_VERSION = "1.3.0-dev"
 SCHEMA_VERSION = 1
 MAX_SETTINGS_BYTES = 2 * 1024 * 1024
+MAX_PAIRWISE_GROUPS = 20
 AGGREGATION_NAMES = ["Mean", "Median", "Min", "Max", "Std", "Sum"]
 LAYOUTS = ["By original columns", "By original rows", "By plate groups (template)"]
 PLOT_TYPES = [
@@ -30,7 +31,7 @@ DEFAULT_SETTINGS = {
     "color_palette": "Rose", "plot_columns": [], "plot_type": PLOT_TYPES[0],
     "error_method": "None", "stat_time": None, "stat_metric": None,
     "ttest_time_a": None, "ttest_metric_a": None, "ttest_time_b": None,
-    "ttest_metric_b": None,
+    "ttest_metric_b": None, "pairwise_enabled": False, "pairwise_groups": [],
 }
 ENUMS = {
     "agg_layout_mode": LAYOUTS, "agg_name": AGGREGATION_NAMES,
@@ -53,18 +54,27 @@ def validate_config(config: Any) -> dict:
         raise ValueError("Not a PlateMaster analysis settings file.")
     if type(config.get("schema_version")) is not int or config["schema_version"] != SCHEMA_VERSION:
         raise ValueError("Unsupported settings schema version.")
+    # Older schema-1 files predate optional pairwise settings. Default them off.
+    config = deepcopy(config)
     settings = config.get("settings")
+    if isinstance(settings, dict):
+        settings.setdefault("pairwise_enabled", False)
+        settings.setdefault("pairwise_groups", [])
     if not isinstance(settings, dict) or set(settings) != set(DEFAULT_SETTINGS):
         raise ValueError("Settings fields are missing or unknown.")
     for key, choices in ENUMS.items():
         if settings[key] not in choices:
             raise ValueError(f"Unsupported {key}: {settings[key]!r}.")
-    for key in ("selected_rows", "selected_columns", "plot_columns"):
+    for key in ("selected_rows", "selected_columns", "plot_columns", "pairwise_groups"):
         value = settings[key]
         if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
             raise ValueError(f"{key} must be a list of names.")
         if len(value) != len(set(value)):
             raise ValueError(f"{key} contains duplicate names.")
+    if type(settings["pairwise_enabled"]) is not bool:
+        raise ValueError("pairwise_enabled must be true or false.")
+    if len(settings["pairwise_groups"]) > MAX_PAIRWISE_GROUPS:
+        raise ValueError(f"Select no more than {MAX_PAIRWISE_GROUPS} pairwise groups.")
     for key, (low, high) in THRESHOLDS.items():
         value = settings[key]
         if type(value) not in (int, float) or not math.isfinite(value) or not low <= value <= high:

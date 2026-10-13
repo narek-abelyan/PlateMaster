@@ -20,7 +20,7 @@ import altair as alt
 from scipy import stats as scipy_stats
 
 from analysis_settings import (
-    APP_VERSION, DEFAULT_SETTINGS, ENUMS, LAYOUTS, PLOT_TYPES, dumps_config,
+    APP_VERSION, DEFAULT_SETTINGS, ENUMS, LAYOUTS, MAX_PAIRWISE_GROUPS, PLOT_TYPES, dumps_config,
     input_record, loads_config, make_config, metric_names, provenance_sheets,
     replay_warnings, software_record, validate_config,
 )
@@ -536,6 +536,24 @@ def _welch_t_test(values_a: list[float], values_b: list[float]) -> pd.DataFrame:
 def _welch_p_value(values_a: list[float], values_b: list[float]) -> float:
     """Return exactly the same Welch p-value as the two-group comparison table."""
     return _welch_result(values_a, values_b)["p"]
+
+
+def _pairwise_p_values(group_values: dict[str, list[float]]) -> pd.DataFrame:
+    """Return unadjusted Welch p-values once per pair, in the upper triangle.
+
+    Require 2–20 explicitly selected groups. Leave the diagonal and lower
+    triangle blank; report undefined comparisons as N/A and retain numeric p-values.
+    """
+    labels = list(group_values)
+    if not 2 <= len(labels) <= MAX_PAIRWISE_GROUPS:
+        raise ValueError(f"Select between 2 and {MAX_PAIRWISE_GROUPS} groups.")
+    matrix = pd.DataFrame("", index=labels, columns=labels, dtype=object)
+    matrix.index.name = "Group (Time | metric)"
+    for i, first in enumerate(labels):
+        for second in labels[i + 1:]:
+            p_value = _welch_p_value(group_values[first], group_values[second])
+            matrix.loc[first, second] = "N/A" if pd.isna(p_value) else p_value
+    return matrix
 
 
 def _build_excel_report(sheets: dict[str, pd.DataFrame]) -> bytes:
@@ -1177,40 +1195,37 @@ def run_dashboard() -> None:
         ttest_df = _welch_t_test(values_a, values_b)
         st.dataframe(ttest_df.astype({"Value": "string"}), width="stretch")
 
-        st.subheader("Pairwise T-test p-values matrix (row-column vs row-column)")
-        group_values: dict[str, list[float]] = {}
-        ordered_group_labels: list[str] = []
-        for tm in unique_times:
-            tm_label = _format_time_label(tm)
-            files_tm = combined_df.loc[combined_df["Time"] == tm, "File"].astype(str).tolist()
-            for metric in metric_columns:
-                label = f"{tm_label}-{metric}"
-                vals_metric: list[float] = []
-                for file_name in files_tm:
-                    vals_metric.extend(source_value_lookup.get((file_name, str(metric)), []))
-                group_values[label] = vals_metric
-                ordered_group_labels.append(label)
-
-        pairwise_matrix_df = pd.DataFrame("", index=ordered_group_labels, columns=ordered_group_labels)
-        for i, label_i in enumerate(ordered_group_labels):
-            for j, label_j in enumerate(ordered_group_labels):
-                if i == j:
-                    pairwise_matrix_df.loc[label_i, label_j] = "1.0"
-                elif j > i:
-                    p_val = _welch_p_value(group_values[label_i], group_values[label_j])
-                    if pd.isna(p_val):
-                        display_p = "N/A"
-                    elif p_val < 0.005:
-                        display_p = "<0.005"
-                    else:
-                        display_p = f"{p_val:.6f}"
-                    pairwise_matrix_df.loc[label_i, label_j] = display_p
-                    pairwise_matrix_df.loc[label_j, label_i] = display_p
-
-        if pairwise_matrix_df.empty:
-            st.info("Not enough data for pairwise row-column T-tests.")
+        st.subheader("Optional pairwise comparisons")
+        pairwise_matrix_df = pd.DataFrame()
+        pairwise_enabled = st.checkbox("Enable pairwise comparisons", key="pairwise_enabled")
+        if pairwise_enabled:
+            st.warning("These p-values are unadjusted for multiple comparisons. "
+                       "Interpreting many comparisons increases the risk of false-positive findings.")
+            # Only build vectors for selected groups, not for every time/metric pair.
+            group_options = {f"{float(tm)} | {metric}": (tm, metric)
+                             for tm in unique_times for metric in metric_columns}
+            saved_groups = st.session_state.get("pairwise_groups", [])
+            available_groups = [label for label in saved_groups if label in group_options]
+            if saved_groups != available_groups:
+                st.warning("Unavailable pairwise groups were removed; review the selection.")
+                st.session_state["pairwise_groups"] = available_groups
+            chosen_groups = st.multiselect("Groups to compare (Time | metric)", options=list(group_options),
+                                          key="pairwise_groups", max_selections=MAX_PAIRWISE_GROUPS)
+            st.caption(f"Select 2–{MAX_PAIRWISE_GROUPS} groups. Each pair is calculated once; "
+                       "the diagonal and lower triangle are blank. N/A means the test is undefined.")
+            if 2 <= len(chosen_groups) <= MAX_PAIRWISE_GROUPS:
+                group_values = {}
+                for label in chosen_groups:
+                    tm, metric = group_options[label]
+                    files_tm = combined_df.loc[combined_df["Time"] == tm, "File"].astype(str)
+                    group_values[label] = [value for name in files_tm
+                                           for value in source_value_lookup.get((name, str(metric)), [])]
+                pairwise_matrix_df = _pairwise_p_values(group_values)
+                st.dataframe(pairwise_matrix_df, width="stretch")
+            else:
+                st.info(f"Select between 2 and {MAX_PAIRWISE_GROUPS} groups to calculate pairwise comparisons.")
         else:
-            st.dataframe(pairwise_matrix_df, width="stretch")
+            st.caption("Pairwise comparisons are off. Enable them only when needed.")
 
         removed_df_export = pd.DataFrame(removed_outliers_log)
         if not removed_df_export.empty:
@@ -1509,11 +1524,17 @@ def run_dashboard() -> None:
             "Aggregated table": combined_display_df,
             "Statistical analysis": stat_table,
             "T-test analysis": ttest_df,
-            "Pairwise T-test p-values": pairwise_matrix_df,
             "Outlier log": removed_df_export,
             "Outlier statistics": outlier_stats_df,
             "Plot data": plot_display_df,
         }
+        if not pairwise_matrix_df.empty:
+            report_sheets["Pairwise T-test p-values"] = pairwise_matrix_df.reset_index()
+            report_sheets["Pairwise notes"] = pd.DataFrame({"Note": [
+                "Two-sided Welch t-tests; p-values are unadjusted for multiple comparisons.",
+                "Only selected time/metric groups are compared. Each pair is calculated once.",
+                "The diagonal and lower triangle are intentionally blank; N/A denotes an undefined test.",
+            ]})
         config = _capture_analysis_config()
         report_sheets.update(provenance_sheets(config))
         report_bytes = _build_excel_report(report_sheets)
