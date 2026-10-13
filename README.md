@@ -189,7 +189,7 @@ pip install -r requirements.txt
 If there is no `requirements.txt`, install the main dependencies manually:
 
 ```bash
-pip install streamlit pandas numpy scipy altair matplotlib openpyxl xlrd python-calamine
+pip install streamlit pandas numpy scipy altair openpyxl xlrd python-calamine
 ```
 
 Optional, but useful for old or problematic `.xls` files: install **LibreOffice** so PlateMaster can attempt automatic conversion to `.xlsx`.
@@ -398,6 +398,8 @@ LICENSE             # Full MIT License text
 The Streamlit entry point remains `PlateMaster1.2.py`. Settings validation and provenance are kept in `analysis_settings.py`; this revision does not perform a full architectural refactor. The development version is identified as `1.3.0-dev` inside the app and exported settings.
 
 ### Run the regression checks
+
+The [Tests workflow](https://github.com/narek-abelyan/PlateMaster/actions/workflows/tests.yml) runs the test suite automatically on pushes and pull requests, and can also be started manually from the Actions tab. Its matrix includes Linux (Ubuntu) and Windows with Python 3.12 and 3.13. Each job installs the test dependencies, checks their consistency, records their resolved versions, and runs `python -m pytest -q`. Check the individual jobs for the result of a particular revision; a passing run confirms the covered scenarios, not every possible input or workflow.
 
 Tested locally on Linux with Python 3.13.12, Streamlit 1.63.0, pandas 2.3.3, SciPy 1.17.1, openpyxl 3.1.5, xlrd 2.0.2 and python-calamine 0.8.2. These are recorded test-environment versions, not a claim that all platforms have been validated. SciPy ≥ 1.11 and Streamlit ≥ 1.49 are required for APIs used here.
 
@@ -666,7 +668,7 @@ pip install -r requirements.txt
 Если файла `requirements.txt` нет, установите основные зависимости вручную:
 
 ```bash
-pip install streamlit pandas numpy scipy altair matplotlib openpyxl xlrd python-calamine
+pip install streamlit pandas numpy scipy altair openpyxl xlrd python-calamine
 ```
 
 Опционально установите **LibreOffice**, если нужно открывать старые или повреждённые `.xls` файлы.
@@ -871,6 +873,8 @@ LICENSE             # Full MIT License text
 Точка запуска остаётся `PlateMaster1.2.py`. Проверка настроек и сведения об анализе вынесены в `analysis_settings.py`; полного разделения архитектуры эта ревизия не выполняет. В приложении и настройках указана версия разработки `1.3.0-dev`.
 
 ### Запуск проверок
+
+[Проверка Tests на GitHub](https://github.com/narek-abelyan/PlateMaster/actions/workflows/tests.yml) автоматически запускает тесты при отправке изменений и создании или обновлении pull request. Её также можно запустить вручную на вкладке Actions. Проверки настроены для Linux (Ubuntu) и Windows с Python 3.12 и 3.13. Каждое задание устанавливает зависимости тестов, проверяет их совместимость, записывает установленные версии и выполняет `python -m pytest -q`. Результат конкретной версии кода виден в заданиях: успешный запуск подтверждает проверенные сценарии, а не все возможные данные и действия.
 
 Локально проверено на Linux: Python 3.13.12, Streamlit 1.63.0, pandas 2.3.3, SciPy 1.17.1, openpyxl 3.1.5, xlrd 2.0.2 и python-calamine 0.8.2. Это сведения о проверенном окружении, а не заявление о проверке всех платформ. Используемые API требуют SciPy ≥ 1.11 и Streamlit ≥ 1.49.
 

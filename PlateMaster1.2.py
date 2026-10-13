@@ -17,7 +17,6 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 import altair as alt
-import matplotlib.pyplot as plt
 from scipy import stats as scipy_stats
 
 from analysis_settings import (
@@ -39,6 +38,7 @@ OLE_SIGNATURE = bytes.fromhex("D0CF11E0A1B11AE1")
 
 
 def _available_excel_engines_for_suffix(suffix: str) -> list[str]:
+    """Return reader candidates ordered for a file suffix, preferring installed Calamine."""
     suffix = suffix.lower()
     engines = ["openpyxl", "xlrd"] if suffix in {".xlsx", ".xlsm", "xlsx", "xlsm"} else ["xlrd", "openpyxl"]
     if importlib.util.find_spec("python_calamine") is not None:
@@ -48,6 +48,10 @@ def _available_excel_engines_for_suffix(suffix: str) -> list[str]:
 
 
 def _try_libreoffice_convert_bytes_to_xlsx(content: bytes, filename: str = "input.xls") -> bytes | None:
+    """Convert spreadsheet bytes to XLSX in a temporary directory using LibreOffice.
+
+    Use the filename suffix for the temporary input. Return converted bytes,
+    or None when LibreOffice is unavailable or does not produce an XLSX file."""
     office_bin = shutil.which("libreoffice") or shutil.which("soffice")
     if office_bin is None:
         return None
@@ -72,6 +76,7 @@ def _try_libreoffice_convert_bytes_to_xlsx(content: bytes, filename: str = "inpu
         return output_path.read_bytes()
 
 def discover_excel_files(folder: str) -> list[Path]:
+    """Return sorted Excel paths directly inside folder, or [] for an invalid folder."""
     base = Path(folder).expanduser().resolve()
     if not base.exists() or not base.is_dir():
         return []
@@ -85,6 +90,11 @@ def discover_excel_files(folder: str) -> list[Path]:
 
 
 def _read_spreadsheet_flexible_from_bytes(content: bytes, filename: str = "") -> pd.DataFrame:
+    """Read spreadsheet bytes using Excel engines, text fallbacks, then LibreOffice.
+
+    The filename selects reader order; Excel readers use their default first
+    sheet and header row. Return the parsed DataFrame, or raise ValueError
+    with reader diagnostics if all attempts fail."""
     errors: list[str] = []
     suffix = filename.lower().rsplit('.', 1)[-1] if '.' in filename else ""
 
@@ -121,6 +131,10 @@ def _read_spreadsheet_flexible_from_bytes(content: bytes, filename: str = "") ->
 
 
 def _read_spreadsheet_flexible_from_path(path: Path) -> pd.DataFrame:
+    """Read a path using Excel engines, text fallbacks, then LibreOffice conversion.
+
+    Return the parsed DataFrame before sanitization. Excel readers use their
+    default first sheet and header row. Raise ValueError if all readers fail."""
     errors: list[str] = []
     suffix = path.suffix.lower()
     engine_attempts = _available_excel_engines_for_suffix(suffix)
@@ -153,6 +167,11 @@ def _read_spreadsheet_flexible_from_path(path: Path) -> pd.DataFrame:
     )
 
 def sanitize_table(frame: pd.DataFrame) -> pd.DataFrame:
+    """Return row identifiers and numeric measurement columns from a parsed table.
+
+    Rename the first column to row_id and trim its string labels. Coerce
+    non-numeric measurements to NaN; drop columns and rows with no numeric
+    measurements. Raise ValueError when no usable numeric table remains."""
     if frame.empty:
         raise ValueError("Empty table")
 
@@ -179,16 +198,19 @@ def sanitize_table(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def load_table_from_path(path: Path) -> pd.DataFrame:
+    """Read and sanitize a spreadsheet path; propagate parsing or validation errors."""
     return sanitize_table(_read_spreadsheet_flexible_from_path(path))
 
 
 def load_table_from_bytes(content: bytes, filename: str = "") -> pd.DataFrame:
+    """Read and sanitize uploaded bytes, using filename to choose reader order."""
     return sanitize_table(_read_spreadsheet_flexible_from_bytes(content, filename))
 
 
 
 
 def _column_sort_key(label: str) -> tuple[int, float | str]:
+    """Return a key that orders numeric labels by value before other text labels."""
     label_str = str(label).strip()
     try:
         return (0, float(label_str.replace(",", ".")))
@@ -197,10 +219,15 @@ def _column_sort_key(label: str) -> tuple[int, float | str]:
 
 
 def _sort_columns_natural(labels: list[str]) -> list[str]:
+    """Return column labels sorted numerically where possible, then lexically."""
     return sorted(labels, key=_column_sort_key)
 
 
 def _extract_time_from_filename(filename: str) -> float | None:
+    """Return the last unsigned numeric token in the filename stem, or None.
+
+    Accept a period or comma as decimal separator. No underscore is required;
+    sample or replicate identifiers can consequently be interpreted as time."""
     stem = Path(filename).stem
     matches = re.findall(r"(\d+(?:[\.,]\d+)?)", stem)
     if not matches:
@@ -214,6 +241,7 @@ def _extract_time_from_filename(filename: str) -> float | None:
 
 
 def _format_time_label(value: float | int | str | None) -> str:
+    """Format a time to at most six decimals; map None to empty text and retain other text."""
     if value is None:
         return ""
     try:
@@ -224,6 +252,11 @@ def _format_time_label(value: float | int | str | None) -> str:
         return str(value)
 
 def _remove_outliers(series: pd.Series, method: str, strictness: float) -> pd.Series:
+    """Return non-missing observations retained by the selected outlier rule.
+
+    Preserve original indices for logging. Strictness sets the IQR multiplier,
+    Z-score threshold, or modified MAD-score threshold. None disables filtering;
+    zero dispersion or an unrecognized method leaves available values unchanged."""
     s = series.dropna().astype(float)
     if s.empty or method == "None":
         return s
@@ -283,6 +316,12 @@ def aggregate_rows(
     outlier_method: str = "None",
     outlier_strictness: float = 1.5,
 ) -> tuple[pd.DataFrame, list[dict[str, float | str]], dict[str, dict[str, float]], dict[str, list[float]]]:
+    """Aggregate selected rows into one value per selected measurement column.
+
+    Apply func to observations remaining after missing-value removal and
+    optional outlier filtering. Return the one-row DataFrame, removed-value
+    records, per-column dispersion metrics, and retained observations.
+    Raise ValueError if no selected rows or usable values remain."""
     filtered = table[table["row_id"].isin(selected_rows)]
     if filtered.empty:
         raise ValueError("Selected rows not found in table")
@@ -329,6 +368,12 @@ def aggregate_by_groups(
     outlier_method: str = "None",
     outlier_strictness: float = 1.5,
 ) -> tuple[pd.DataFrame, list[dict[str, float | str]], dict[str, dict[str, float]], dict[str, list[float]]]:
+    """Aggregate plate cells listed as (row_id, column) pairs in each named group.
+
+    Apply func after removing missing values and optional outliers. Return
+    the one-row group DataFrame, removed-cell records, dispersion metrics,
+    and retained observations. Skip unavailable cells and empty groups;
+    raise ValueError when no group has usable values."""
     removed_rows: list[dict[str, float | str]] = []
     values: dict[str, float] = {}
     group_stats: dict[str, dict[str, float]] = {}
@@ -376,6 +421,11 @@ def aggregate_columns_by_row(
     outlier_method: str = "None",
     outlier_strictness: float = 1.5,
 ) -> tuple[pd.DataFrame, list[dict[str, float | str]], dict[str, dict[str, float]], dict[str, list[float]]]:
+    """Aggregate selected measurement columns into one value per selected row.
+
+    Apply func after missing-value removal and optional outlier filtering.
+    Return the one-row DataFrame, removed-cell records, per-row dispersion
+    metrics, and retained observations. Raise ValueError if no usable data remain."""
     filtered = table[table["row_id"].isin(selected_rows)]
     if filtered.empty:
         raise ValueError("Selected rows not found in table")
@@ -476,6 +526,10 @@ def _welch_p_value(values_a: list[float], values_b: list[float]) -> float:
 
 
 def _build_excel_report(sheets: dict[str, pd.DataFrame]) -> bytes:
+    """Serialize named DataFrames as an XLSX workbook in memory.
+
+    Replace invalid sheet-name characters, truncate names to 31 characters,
+    and write each table without its DataFrame index. Return workbook bytes."""
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         for sheet_name, df in sheets.items():
@@ -486,6 +540,7 @@ def _build_excel_report(sheets: dict[str, pd.DataFrame]) -> bytes:
 
 
 def _to_numeric_series(values: pd.Series | list[float] | np.ndarray) -> pd.Series:
+    """Coerce a one-dimensional collection to numbers and omit missing or invalid entries."""
     return pd.to_numeric(pd.Series(values, dtype="object"), errors="coerce").dropna()
 
 
@@ -502,6 +557,11 @@ AGGREGATIONS: dict[str, Callable[[pd.Series | list[float] | np.ndarray], float]]
 
 
 def _gradient_style(df: pd.DataFrame, mode: str = "Global scale", palette: str = "Rose"):
+    """Return a pandas Styler with custom RGB cell backgrounds for numeric data.
+
+    Exclude Time and normalize colors globally, by column, or by row using
+    the requested palette. Return the original DataFrame if empty, without
+    numeric columns, or if styling fails."""
     if df.empty:
         return df
     numeric_cols = [c for c in df.select_dtypes(include=["number"]).columns.tolist() if str(c).strip().lower() != "time"]
@@ -558,6 +618,7 @@ def _gradient_style(df: pd.DataFrame, mode: str = "Global scale", palette: str =
 
 
 def _input_manifest() -> list[dict]:
+    """Return sorted loaded-file metadata, using parsed-table records when bytes are unavailable."""
     records = st.session_state.get("input_records", {})
     return [records.get(name) or input_record(name, None, table, _extract_time_from_filename(name))
             for name, table in sorted(st.session_state.loaded_tables.items())]
@@ -589,6 +650,7 @@ def _capture_analysis_config() -> dict:
 
 
 def _save_named_preset() -> None:
+    """Save current analysis settings under the session preset name, or show a missing-name error."""
     name = st.session_state.get("preset_name", "").strip()
     if not name:
         st.session_state["_settings_error"] = "Enter a preset name before saving."
@@ -598,6 +660,7 @@ def _save_named_preset() -> None:
 
 
 def _queue_named_preset() -> None:
+    """Queue a copied session preset for application before widgets are recreated."""
     name = st.session_state.get("preset_to_load", "")
     if not name:
         st.session_state["_settings_error"] = "Choose a preset to load."
@@ -606,6 +669,7 @@ def _queue_named_preset() -> None:
 
 
 def _queue_settings_upload() -> None:
+    """Validate uploaded JSON and queue settings, storing any validation error for display."""
     uploaded = st.session_state.get("settings_upload")
     if uploaded is None:
         st.session_state["_settings_error"] = "Choose a settings JSON file first."
@@ -677,6 +741,7 @@ def _edit_plate_groups(rows: list[str], columns: list[str]) -> dict[str, list[tu
 
 
 def _render_settings_download(slot) -> None:
+    """Capture current settings, retain them in session state, and render a JSON download."""
     config = _capture_analysis_config()
     st.session_state["_current_analysis_config"] = config
     st.session_state["_last_settings"] = deepcopy(config["settings"])
@@ -687,6 +752,7 @@ def _render_settings_download(slot) -> None:
 
 
 def run_dashboard() -> None:
+    """Render the Streamlit import, analysis, plotting, and report-download workflow."""
     st.set_page_config(page_title="PlateMaster - Dashboard for Plate Analysis", layout="wide")
     st.title("PlateMaster - Dashboard for Plate Analysis")
     st.caption(f"Version {APP_VERSION}")
@@ -1425,6 +1491,7 @@ def run_dashboard() -> None:
 
 
 def main() -> None:
+    """Launch Streamlit when run as a script, or render the dashboard inside Streamlit."""
     if get_script_run_ctx is not None and get_script_run_ctx() is None:
         try:
             os.execvp("streamlit", ["streamlit", "run", str(Path(__file__).resolve())])

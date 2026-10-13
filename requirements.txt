@@ -2,7 +2,6 @@ streamlit>=1.49
 pandas
 numpy
 altair
-matplotlib
 openpyxl
 xlrd
 python-calamine

@@ -163,7 +163,7 @@ def input_record(name: str, content: bytes | None, table: pd.DataFrame, time: fl
 def software_record(directory: Path) -> dict:
     """Identify both the Git revision and the actual source files, including uncommitted edits."""
     libraries = {}
-    for name in ("streamlit", "pandas", "numpy", "scipy", "altair", "matplotlib", "openpyxl", "xlrd", "python-calamine"):
+    for name in ("streamlit", "pandas", "numpy", "scipy", "altair", "openpyxl", "xlrd", "python-calamine"):
         try:
             libraries[name] = metadata.version(name)
         except metadata.PackageNotFoundError:
