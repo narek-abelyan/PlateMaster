@@ -161,6 +161,10 @@ For cross-file time-course analysis, PlateMaster extracts the **last number from
 
 If a filename does not contain a number, the file can still be loaded, but time-based statistics and plotting may be limited.
 
+### Documented validation example
+
+[`example_2`](example_2/README.md) is a CC0 synthetic validation set with five Excel files, a known plate map, reloadable analysis settings, exact instructions and fixed expected numerical results. Its regression test reads the distributed workbooks and compares PlateMaster output with the reference means, Student-t intervals and Welch test.
+
 ---
 
 ## ⚙️ Installation
@@ -398,6 +402,7 @@ To recover JSON from Excel, join the `JSON` cells in `Settings JSON` in ascendin
 ```text
 PlateMaster1.2.py   # Main Streamlit application and analysis logic
 analysis_settings.py # Settings validation, JSON and provenance
+example_2/          # CC0 documented validation dataset and expected results
 tests/              # Numerical, settings and Streamlit regression tests
 requirements-dev.txt # Dependencies for running tests
 requirements.txt    # Python dependencies
@@ -419,6 +424,8 @@ python -m pytest -q
 ```
 
 Tests cover known Welch/CI results, missing and degenerate samples, every aggregation layout, rejected settings, saved plate groups, changed-input detection, named presets, fresh-session JSON replay, and Excel provenance. Interface tests simulate the uploaded JSON bytes because Streamlit AppTest does not provide a browser file-picker API.
+
+The distributed validation dataset can be checked separately with `python -m pytest -q tests/test_validation_example.py`.
 
 ---
 
@@ -649,6 +656,10 @@ PlateMaster ожидает таблицу, где:
 | `sample_time_2.5.xls` | `2.5` |
 
 Если в имени файла нет числа, файл всё равно может быть загружен, но time-based статистика и графики могут быть ограничены.
+
+### Документированный проверочный пример
+
+[`example_2`](example_2/README.md) — синтетический набор под лицензией CC0: пять Excel-файлов, известная карта планшета, готовые настройки, точная инструкция и зафиксированные ожидаемые численные результаты. Регрессионный тест читает приложенные файлы и сравнивает результаты PlateMaster с эталонными средними, интервалами Стьюдента и тестом Уэлча.
 
 ---
 
@@ -903,6 +914,8 @@ python -m pytest -q
 ```
 
 Тесты проверяют известные результаты Уэлча и доверительных интервалов, пропуски и вырожденные выборки, все способы группировки, отказ от неверных настроек, сохранение групп, изменение входных файлов, пресеты, повторение JSON в новой сессии и состав Excel-отчёта. Загрузка JSON в тестах интерфейса имитируется на уровне полученных байтов: Streamlit AppTest не управляет браузерным выбором файла.
+
+Отдельный проверочный набор запускается командой `python -m pytest -q tests/test_validation_example.py`.
 
 ---
 

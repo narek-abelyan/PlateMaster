@@ -1,0 +1,28 @@
+{
+  "format": "platemaster.validation-manifest",
+  "version": 1,
+  "license": "CC0-1.0",
+  "time_unit": "minutes",
+  "files": [
+    {
+      "file": "validation_plate_0.xlsx",
+      "sha256": "8c8d3ad1c3b69b113969bd347b313782e15dc37153f5ea1314ca5761ce8358e5"
+    },
+    {
+      "file": "validation_plate_5.xlsx",
+      "sha256": "fadb8db380b88fca11b552135af963e1ebaf781bb4972bb7db37bce2cebcf182"
+    },
+    {
+      "file": "validation_plate_10.xlsx",
+      "sha256": "a23c98e4ab2f81d034207c50530d03e6bfc711314b5fd27eedf9a00ae60ad2bc"
+    },
+    {
+      "file": "validation_plate_15.xlsx",
+      "sha256": "0ce0d0a2e1cd76a0a4b2282cccba351c39a32efc4ae80bda25c32951c5bb607f"
+    },
+    {
+      "file": "validation_plate_20.xlsx",
+      "sha256": "97091942a581a9e1eee0e845395df5228e5f9733b090fb99b13d9dd6b4c7645d"
+    }
+  ]
+}

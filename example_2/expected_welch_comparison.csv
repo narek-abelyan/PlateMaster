@@ -1,0 +1,2 @@
+group_a,time_a_minutes,group_b,time_b_minutes,n_a,n_b,mean_a,mean_b,welch_t,welch_df,p_two_sided
+Control,0,Treated,20,8,8,3,14,-16.8027775481714,14,1.12391171760089e-10

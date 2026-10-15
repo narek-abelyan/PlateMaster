@@ -1,0 +1,17 @@
+row_id,column,group
+A,1,Control
+A,2,Control
+A,3,Treated
+A,4,Treated
+B,1,Control
+B,2,Control
+B,3,Treated
+B,4,Treated
+C,1,Control
+C,2,Control
+C,3,Treated
+C,4,Treated
+D,1,Control
+D,2,Control
+D,3,Treated
+D,4,Treated
