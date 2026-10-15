@@ -546,10 +546,11 @@ def _welch_p_value(values_a: list[float], values_b: list[float]) -> float:
 
 
 def _pairwise_p_values(group_values: dict[str, list[float]]) -> pd.DataFrame:
-    """Return unadjusted Welch p-values once per pair, in the upper triangle.
+    """Return formatted unadjusted Welch p-values once per pair, in the lower triangle.
 
-    Require 2–20 explicitly selected groups. Leave the diagonal and lower
-    triangle blank; report undefined comparisons as N/A and retain numeric p-values.
+    Require 2–20 explicitly selected groups. Leave the diagonal and upper
+    triangle blank. Show undefined comparisons as N/A, values below 0.005 as
+    ``p < 0.005``, and all other p-values rounded to three decimal places.
     """
     labels = list(group_values)
     if not 2 <= len(labels) <= MAX_PAIRWISE_GROUPS:
@@ -559,7 +560,13 @@ def _pairwise_p_values(group_values: dict[str, list[float]]) -> pd.DataFrame:
     for i, first in enumerate(labels):
         for second in labels[i + 1:]:
             p_value = _welch_p_value(group_values[first], group_values[second])
-            matrix.loc[first, second] = "N/A" if pd.isna(p_value) else p_value
+            if pd.isna(p_value):
+                displayed = "N/A"
+            elif p_value < 0.005:
+                displayed = "p < 0.005"
+            else:
+                displayed = f"{p_value:.3f}"
+            matrix.loc[second, first] = displayed
     return matrix
 
 
@@ -1307,7 +1314,7 @@ def run_dashboard() -> None:
             chosen_groups = st.multiselect("Groups to compare (Time | metric)", options=list(group_options),
                                           key="pairwise_groups", max_selections=MAX_PAIRWISE_GROUPS)
             st.caption(f"Select 2–{MAX_PAIRWISE_GROUPS} groups. Each pair is calculated once; "
-                       "the diagonal and lower triangle are blank. N/A means the test is undefined.")
+                       "the diagonal and upper triangle are blank. Values below 0.005 are shown as p < 0.005; other values are rounded to three decimal places. N/A means the test is undefined.")
             if 2 <= len(chosen_groups) <= MAX_PAIRWISE_GROUPS:
                 group_values = {}
                 for label in chosen_groups:
@@ -1629,7 +1636,7 @@ def run_dashboard() -> None:
             report_sheets["Pairwise notes"] = pd.DataFrame({"Note": [
                 "Two-sided Welch t-tests; p-values are unadjusted for multiple comparisons.",
                 "Only selected time/metric groups are compared. Each pair is calculated once.",
-                "The diagonal and lower triangle are intentionally blank; N/A denotes an undefined test.",
+                "The diagonal and upper triangle are intentionally blank; p-values below 0.005 are shown as p < 0.005, other values are rounded to three decimals, and N/A denotes an undefined test.",
             ]})
         config = _capture_analysis_config()
         report_sheets.update(provenance_sheets(config))
