@@ -848,9 +848,13 @@ def _render_settings_download(slot) -> None:
     st.session_state["_current_analysis_config"] = config
     st.session_state["_last_settings"] = deepcopy(config["settings"])
     with slot.container():
-        st.download_button("Download settings.json", data=dumps_config(config),
-                           file_name="plate_master_analysis.json", mime="application/json")
-        st.caption("Settings include the plate groups and input checksums. Keep the original spreadsheets separately.")
+        st.download_button(
+            "Download settings.json",
+            data=dumps_config(config),
+            file_name="plate_master_analysis.json",
+            mime="application/json",
+            width="stretch",
+        )
 
 
 def run_dashboard() -> None:
@@ -1077,8 +1081,16 @@ def run_dashboard() -> None:
         with preset_col3:
             st.button("Apply preset", on_click=_queue_named_preset, width="stretch")
         st.file_uploader("Import analysis settings (.json)", type=["json"], key="settings_upload")
-        st.button("Apply imported settings", on_click=_queue_settings_upload)
-        settings_download_slot = st.empty()
+        settings_apply_col, settings_download_col = st.columns(2)
+        with settings_apply_col:
+            st.button(
+                "Apply imported settings",
+                on_click=_queue_settings_upload,
+                width="stretch",
+            )
+        with settings_download_col:
+            settings_download_slot = st.empty()
+        st.caption("Settings include the plate groups and input checksums. Keep the original spreadsheets separately.")
 
         run_clicked = st.button("Run")
         if run_clicked:
