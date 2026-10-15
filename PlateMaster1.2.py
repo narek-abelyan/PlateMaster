@@ -1014,7 +1014,6 @@ def run_dashboard() -> None:
             st.info("Saved input checksums, parsed data and numerical software versions match.")
 
 
-    plate_template_tools_slot = None
     with st.sidebar:
         st.header("2) Selection")
         layout_mode = st.selectbox(
@@ -1023,10 +1022,6 @@ def run_dashboard() -> None:
             index=0,
             key="agg_layout_mode",
         )
-        if layout_mode == "By plate groups (template)":
-            st.subheader("Plate template file")
-            plate_template_tools_slot = st.container()
-
         selected_rows = st.multiselect("Rows", options=all_rows, default=all_rows if "selected_rows" not in st.session_state else None, key="selected_rows")
         selected_columns = st.multiselect("Columns", options=all_columns, default=all_columns if "selected_columns" not in st.session_state else None, key="selected_columns")
         selected_columns = _sort_columns_natural(selected_columns)
@@ -1093,9 +1088,16 @@ def run_dashboard() -> None:
             metric_labels = selected_rows
         elif layout_mode == "By plate groups (template)":
             st.header("Plate template grouping")
-            st.caption("Edit group names in the grid. Upload, apply, and download controls are in the left sidebar.")
-            with plate_template_tools_slot:
+            st.info(
+                "If you already have a plate template, upload its CSV file and click **Apply plate template**. "
+                "If you do not have one, fill in the template grid below manually. You can then download the "
+                "completed template and reuse it in future analyses."
+            )
+            template_upload_col, template_apply_col = st.columns([3, 1])
+            with template_upload_col:
                 st.file_uploader("Upload plate template (.csv)", type=["csv"], key="plate_template_upload")
+            with template_apply_col:
+                st.write("")
                 st.button(
                     "Apply plate template",
                     key="apply_plate_template",
@@ -1103,24 +1105,23 @@ def run_dashboard() -> None:
                     args=(selected_rows, selected_columns),
                     width="stretch",
                 )
-                if "_plate_template_error" in st.session_state:
-                    st.error(st.session_state.pop("_plate_template_error"))
-                if "_plate_template_message" in st.session_state:
-                    st.success(st.session_state.pop("_plate_template_message"))
+            if "_plate_template_error" in st.session_state:
+                st.error(st.session_state.pop("_plate_template_error"))
+            if "_plate_template_message" in st.session_state:
+                st.success(st.session_state.pop("_plate_template_message"))
 
+            st.caption("Enter a group name in each required well. Wells with the same name are analysed as one group.")
             group_map = _edit_plate_groups(selected_rows, selected_columns)
             template_csv = _plate_template_csv(
                 selected_rows, selected_columns, st.session_state.get("_plate_groups", [])
             )
-            with plate_template_tools_slot:
-                st.download_button(
-                    "Download plate template.csv",
-                    data=template_csv,
-                    file_name="plate_master_template.csv",
-                    mime="text/csv",
-                    width="stretch",
-                )
-                st.caption("CSV columns: row_id, column, group. Blank groups remain unassigned.")
+            st.download_button(
+                "Download plate template.csv",
+                data=template_csv,
+                file_name="plate_master_template.csv",
+                mime="text/csv",
+            )
+            st.caption("The CSV contains every selected well. Wells without a group remain blank.")
 
             if not group_map:
                 st.warning("Please define at least one group in plate template")

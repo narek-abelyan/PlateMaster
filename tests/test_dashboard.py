@@ -294,9 +294,9 @@ def test_plate_template_csv_roundtrip_and_gui_import(spreadsheets, monkeypatch, 
 
     at = load_folder(spreadsheets)
     at.selectbox(key="agg_layout_mode").set_value("By plate groups (template)").run()
-    assert "Upload plate template (.csv)" in [item.label for item in at.sidebar.file_uploader]
-    assert "Apply plate template" in [item.label for item in at.sidebar.button]
-    assert "Download plate template.csv" in [item.label for item in at.sidebar.get("download_button")]
+    assert "Upload plate template (.csv)" in [item.label for item in at.file_uploader]
+    assert "Apply plate template" in [item.label for item in at.button]
+    assert "Download plate template.csv" in [item.label for item in at.get("download_button")]
     assert "Download plate template.csv" in downloads
     imported_plate_template(at, monkeypatch, payload)
     assert at.session_state["_plate_groups"] == assignments
