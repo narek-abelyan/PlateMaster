@@ -307,13 +307,14 @@ A1, A2, B1, B2
 
 ### By plate groups (template)
 
-This mode allows custom grouping directly in the app.
+This mode allows custom grouping directly in the app or through a reusable CSV plate map.
 
 1. Select rows and columns.
-2. Enter group labels into the template grid.
+2. Enter group labels into the template grid, or upload a CSV with the columns `row_id,column,group` and click **Apply plate template**.
 3. Cells with the same label are combined into one group.
+4. Click **Download plate template.csv** to save the current map. The exported file includes every selected well; unassigned wells have a blank `group` value.
 
-This is useful for biological replicates, treatment groups, control wells, or custom plate layouts.
+Uploaded templates are checked for duplicate wells, unknown row or column identifiers, and missing coordinates. This is useful for biological replicates, treatment groups, control wells, or custom plate layouts. The plate map can be reused independently of the complete analysis-settings JSON.
 
 ---
 
@@ -803,13 +804,14 @@ A1, A2, B1, B2
 
 ### By plate groups (template)
 
-Позволяет создать группы прямо в интерфейсе:
+Позволяет создать группы прямо в интерфейсе или загрузить готовую карту планшета в CSV:
 
 1. Выберите строки и столбцы.
-2. Введите названия групп в template grid.
+2. Введите названия групп в template grid либо загрузите CSV с колонками `row_id,column,group` и нажмите **Apply plate template**.
 3. Ячейки с одинаковым названием объединяются в одну группу.
+4. Нажмите **Download plate template.csv**, чтобы сохранить текущую карту. В файл входят все выбранные лунки; у неназначенных лунок поле `group` остаётся пустым.
 
-Это удобно для biological replicates, treatment groups, control wells и пользовательских plate layouts.
+При загрузке проверяются повторяющиеся лунки, неизвестные строки и столбцы, а также пустые координаты. Карту можно использовать повторно независимо от полного JSON с настройками анализа.
 
 ---
 

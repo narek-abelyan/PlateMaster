@@ -65,6 +65,23 @@ def imported_settings(at, monkeypatch, payload):
     return at
 
 
+def imported_plate_template(at, monkeypatch, payload):
+    original = st.file_uploader
+
+    def uploaded(label, *args, **kwargs):
+        if kwargs.get("key") == "plate_template_upload":
+            buffer = BytesIO(payload)
+            st.session_state["plate_template_upload"] = buffer
+            return buffer
+        return original(label, *args, **kwargs)
+
+    with monkeypatch.context() as context:
+        context.setattr(st, "file_uploader", uploaded)
+        at.run()
+        click(at, "Apply plate template")
+    return at
+
+
 def test_named_preset_applies_before_widgets(spreadsheets):
     at = load_folder(spreadsheets)
     assert "None" not in at.selectbox(key="agg_name").options
@@ -260,3 +277,34 @@ def test_optional_pairwise_selection_and_report(spreadsheets, downloads):
     at.checkbox(key="pairwise_enabled").uncheck().run()
     assert not at.exception
     assert "Pairwise T-test p-values" not in pd.ExcelFile(BytesIO(downloads["Export report.xlsx"])).sheet_names
+
+
+def test_plate_template_csv_roundtrip_and_gui_import(spreadsheets, monkeypatch, downloads, app_module):
+    rows = ["A", "B", "C"]
+    columns = ["1", "2"]
+    assignments = [
+        {"row_id": row, "column": column, "group": "Control" if column == "1" else "Treated"}
+        for row in rows for column in columns
+    ]
+    payload = app_module._plate_template_csv(rows, columns, assignments)
+    assert app_module._load_plate_template_csv(payload, rows, columns) == assignments
+    exported = pd.read_csv(BytesIO(payload), dtype=str, keep_default_na=False)
+    assert exported.shape == (6, 3)
+    assert exported.columns.tolist() == ["row_id", "column", "group"]
+
+    at = load_folder(spreadsheets)
+    at.selectbox(key="agg_layout_mode").set_value("By plate groups (template)").run()
+    assert "Download plate template.csv" in downloads
+    imported_plate_template(at, monkeypatch, payload)
+    assert at.session_state["_plate_groups"] == assignments
+    assert any("Plate template applied" in item.value for item in at.success)
+    click(at, "Run")
+    assert "Export report.xlsx" in downloads
+    assert not at.exception
+
+    duplicate = b"row_id,column,group\nA,1,Control\nA,1,Treated\n"
+    with pytest.raises(ValueError, match="duplicate wells"):
+        app_module._load_plate_template_csv(duplicate, rows, columns)
+    unknown = b"row_id,column,group\nZ,99,Unknown\n"
+    with pytest.raises(ValueError, match="does not match"):
+        app_module._load_plate_template_csv(unknown, rows, columns)

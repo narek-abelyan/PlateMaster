@@ -752,6 +752,63 @@ def _prepare_selectbox(key: str, options: list) -> None:
         st.session_state.pop(key, None)
 
 
+def _plate_template_csv(rows: list[str], columns: list[str], cells: list[dict]) -> bytes:
+    """Serialize every selected well and its optional group as a reusable CSV template."""
+    labels = {(str(cell["row_id"]), str(cell["column"])): str(cell["group"]) for cell in cells}
+    records = [
+        {"row_id": str(row), "column": str(column), "group": labels.get((str(row), str(column)), "")}
+        for row in rows
+        for column in columns
+    ]
+    return pd.DataFrame(records, columns=["row_id", "column", "group"]).to_csv(index=False).encode("utf-8")
+
+
+def _load_plate_template_csv(content: bytes, rows: list[str], columns: list[str]) -> list[dict]:
+    """Validate a plate-template CSV and return its non-empty group assignments."""
+    try:
+        frame = pd.read_csv(BytesIO(content), dtype=str, keep_default_na=False, encoding="utf-8-sig")
+    except Exception as exc:
+        raise ValueError(f"Unable to read plate template CSV: {exc}") from exc
+    frame.columns = [str(column).strip() for column in frame.columns]
+    required = ["row_id", "column", "group"]
+    if list(frame.columns) != required:
+        raise ValueError("Plate template must contain exactly these columns: row_id, column, group.")
+    for column in required:
+        frame[column] = frame[column].astype(str).str.strip()
+    if frame[["row_id", "column"]].eq("").any(axis=None):
+        raise ValueError("Plate template contains an empty row_id or column.")
+    duplicates = frame.duplicated(["row_id", "column"], keep=False)
+    if duplicates.any():
+        wells = sorted({f"{row.row_id}{row.column}" for row in frame.loc[duplicates].itertuples()})
+        raise ValueError("Plate template contains duplicate wells: " + ", ".join(wells))
+    unknown_rows = sorted(set(frame["row_id"]) - set(map(str, rows)))
+    unknown_columns = _sort_columns_natural(list(set(frame["column"]) - set(map(str, columns))))
+    if unknown_rows or unknown_columns:
+        raise ValueError(
+            f"Plate template does not match the selected data. Unknown rows: {unknown_rows}; "
+            f"unknown columns: {unknown_columns}."
+        )
+    assignments = frame.loc[frame["group"] != "", required].to_dict(orient="records")
+    if not assignments:
+        raise ValueError("Plate template does not contain any group assignments.")
+    return assignments
+
+
+def _apply_plate_template_upload(rows: list[str], columns: list[str]) -> None:
+    """Apply an uploaded CSV plate map to the current template axes."""
+    uploaded = st.session_state.get("plate_template_upload")
+    if uploaded is None:
+        st.session_state["_plate_template_error"] = "Choose a plate template CSV file first."
+        return
+    try:
+        st.session_state["_plate_groups"] = _load_plate_template_csv(uploaded.getvalue(), rows, columns)
+        st.session_state.pop("_template_axes", None)
+        st.session_state.analysis_ready = False
+        st.session_state["_plate_template_message"] = "Plate template applied. Review the groups, then press Run."
+    except (ValueError, TypeError) as exc:
+        st.session_state["_plate_template_error"] = str(exc)
+
+
 def _edit_plate_groups(rows: list[str], columns: list[str]) -> dict[str, list[tuple[str, str]]]:
     """Keep the data editor's base stable across edits; replace it only on load/axis changes."""
     axes = (tuple(rows), tuple(columns))
@@ -1032,8 +1089,35 @@ def run_dashboard() -> None:
             metric_labels = selected_rows
         elif layout_mode == "By plate groups (template)":
             st.header("Plate template grouping")
-            st.caption("Enter group names into cells. Cells with the same label will be aggregated together.")
+            st.caption("Enter group names into cells, or reuse a CSV template with columns: row_id, column, group.")
+            template_upload_col, template_apply_col = st.columns([3, 1])
+            with template_upload_col:
+                st.file_uploader("Upload plate template (.csv)", type=["csv"], key="plate_template_upload")
+            with template_apply_col:
+                st.write("")
+                st.button(
+                    "Apply plate template",
+                    key="apply_plate_template",
+                    on_click=_apply_plate_template_upload,
+                    args=(selected_rows, selected_columns),
+                    width="stretch",
+                )
+            if "_plate_template_error" in st.session_state:
+                st.error(st.session_state.pop("_plate_template_error"))
+            if "_plate_template_message" in st.session_state:
+                st.success(st.session_state.pop("_plate_template_message"))
+
             group_map = _edit_plate_groups(selected_rows, selected_columns)
+            template_csv = _plate_template_csv(
+                selected_rows, selected_columns, st.session_state.get("_plate_groups", [])
+            )
+            st.download_button(
+                "Download plate template.csv",
+                data=template_csv,
+                file_name="plate_master_template.csv",
+                mime="text/csv",
+            )
+            st.caption("The CSV contains every selected well. Blank group cells remain unassigned.")
 
             if not group_map:
                 st.warning("Please define at least one group in plate template")
@@ -1281,7 +1365,8 @@ def run_dashboard() -> None:
         st.header("Cross-file plot")
         if "plot_columns" not in st.session_state:
             st.session_state.plot_columns = list(metric_labels)
-        st.session_state.plot_columns = [c for c in st.session_state.plot_columns if c in metric_labels]
+        available_saved_plot_columns = [c for c in st.session_state.plot_columns if c in metric_labels]
+        st.session_state.plot_columns = available_saved_plot_columns or list(metric_labels)
 
         plot_columns = st.multiselect(
             "Columns to display on one chart (different colors)",

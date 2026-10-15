@@ -28,6 +28,8 @@ The same mapping is provided in `plate_map.csv`. The values are deterministic an
 
 The JSON records the five input-file hashes, plate map and complete analysis settings. A software-environment warning can appear when it is opened with a different PlateMaster or dependency version; this is provenance information and does not prevent applying the settings.
 
+To load only the known plate map, select **By plate groups (template)**, upload `example_2/plate_map.csv` under **Upload plate template (.csv)**, and click **Apply plate template**. This CSV assigns all 96 wells to the 12 documented groups without changing the other analysis settings. The same map can be downloaded from the interface with **Download plate template.csv**.
+
 ## Expected results
 
 `expected_group_results.csv` gives, for every time and group, `n`, mean, median, sample SD (`ddof=1`), SEM, the two-sided 95% Student-t confidence interval for the mean, minimum, maximum, and the two-sided one-sample t-test against zero.
