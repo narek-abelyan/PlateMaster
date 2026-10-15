@@ -6,23 +6,23 @@
   "files": [
     {
       "file": "validation_plate_0.xlsx",
-      "sha256": "8c8d3ad1c3b69b113969bd347b313782e15dc37153f5ea1314ca5761ce8358e5"
+      "sha256": "1de412fc184a31913b33b368729ffcd169c3187ad12b3be18d94baaec5423229"
     },
     {
       "file": "validation_plate_5.xlsx",
-      "sha256": "fadb8db380b88fca11b552135af963e1ebaf781bb4972bb7db37bce2cebcf182"
+      "sha256": "a149a6fa8b760a667bcbed1c779c8992d531f2c88f4b872898c3dfffb036799d"
     },
     {
       "file": "validation_plate_10.xlsx",
-      "sha256": "a23c98e4ab2f81d034207c50530d03e6bfc711314b5fd27eedf9a00ae60ad2bc"
+      "sha256": "5da313b01eab7216924d0db519bb0eef60b8b5d0c67240c4c4e6ee0eaf41970a"
     },
     {
       "file": "validation_plate_15.xlsx",
-      "sha256": "0ce0d0a2e1cd76a0a4b2282cccba351c39a32efc4ae80bda25c32951c5bb607f"
+      "sha256": "1e272d974bd8a3c77f92399fdc294b4fcf15f87243ad32532689de503bb56229"
     },
     {
       "file": "validation_plate_20.xlsx",
-      "sha256": "97091942a581a9e1eee0e845395df5228e5f9733b090fb99b13d9dd6b4c7645d"
+      "sha256": "3292eff9930832266ec26cc50cbaee6b0f8e699a2007486fac0dc3bb48e264fc"
     }
   ]
 }

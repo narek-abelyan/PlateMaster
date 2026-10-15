@@ -36,12 +36,19 @@ def test_documented_validation_example_matches_reference_results(app_module):
     assert manifest["time_unit"] == "minutes"
     assert "CC0-1.0" in (EXAMPLE / "LICENSE.txt").read_text(encoding="utf-8")
     assert config["plate_groups"] == mapping.to_dict(orient="records")
+    assert len(mapping) == 96
+    assert mapping.groupby("group", sort=False).size().to_dict() == {
+        "Control": 8, **{f"Treatment_{index:02d}": 8 for index in range(1, 12)}
+    }
     assert config["settings"]["agg_layout_mode"] == "By plate groups (template)"
     assert config["settings"]["outlier_method"] == "None"
     collected = {}
 
     for path in data_files:
         table = app_module.load_table_from_path(path)
+        assert table.shape == (8, 13)
+        assert table["row_id"].tolist() == list("ABCDEFGH")
+        assert table.columns.tolist() == ["row_id", *[str(column) for column in range(1, 13)]]
         time = app_module._extract_time_from_filename(path.name)
         actual_record = input_record(path.name, path.read_bytes(), table, time)
         assert actual_record["sha256"] == recorded_inputs[path.name]["sha256"]
@@ -55,7 +62,7 @@ def test_documented_validation_example_matches_reference_results(app_module):
         assert removed == []
         collected[time] = source_values
 
-        for group in ("Control", "Treated"):
+        for group in ["Control", *[f"Treatment_{index:02d}" for index in range(1, 12)]]:
             reference = expected[(expected["time_minutes"] == time) & (expected["group"] == group)].iloc[0]
             assert aggregated.iloc[0][group] == pytest.approx(reference["mean"], rel=1e-12)
             assert dispersion[group]["std"] == pytest.approx(reference["sample_sd"], rel=1e-12)
@@ -73,7 +80,7 @@ def test_documented_validation_example_matches_reference_results(app_module):
                 reference["one_sample_p_two_sided"], rel=1e-12
             )
 
-    welch = app_module._welch_result(collected[0.0]["Control"], collected[20.0]["Treated"])
+    welch = app_module._welch_result(collected[0.0]["Control"], collected[20.0]["Treatment_11"])
     assert welch["n_a"] == expected_welch["n_a"]
     assert welch["n_b"] == expected_welch["n_b"]
     assert welch["mean_a"] == pytest.approx(expected_welch["mean_a"], rel=1e-12)

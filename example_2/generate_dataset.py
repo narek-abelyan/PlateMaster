@@ -23,9 +23,12 @@ from analysis_settings import (
 
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT / "data"
-ROWS = ["A", "B", "C", "D"]
+ROWS = list("ABCDEFGH")
+COLUMNS = [str(column) for column in range(1, 13)]
+GROUPS = ["Control", *[f"Treatment_{index:02d}" for index in range(1, 12)]]
+COLUMN_GROUPS = dict(zip(COLUMNS, GROUPS))
 TIMES = [0, 5, 10, 15, 20]
-BASE_VALUES = [1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0, 5.0]
+BASE_VALUES = [float(index) for index in range(1, 9)]
 
 
 def normalize_xlsx(path: Path) -> None:
@@ -52,18 +55,12 @@ def normalize_xlsx(path: Path) -> None:
 
 
 def plate_frame(index: int) -> pd.DataFrame:
-    """Return one 4×4 plate with eight Control and eight Treated wells."""
-    control = [value + index for value in BASE_VALUES]
-    treated = [value + 3 + 2 * index for value in BASE_VALUES]
-    return pd.DataFrame(
-        {
-            "Well": ROWS,
-            "1": control[0::2],
-            "2": control[1::2],
-            "3": treated[0::2],
-            "4": treated[1::2],
-        }
-    )
+    """Return one 8×12 plate with 12 groups and eight replicates per group."""
+    data: dict[str, list[float] | list[str]] = {"Well": ROWS}
+    for group_index, column in enumerate(COLUMNS):
+        time_increment = index * (1 + group_index % 3)
+        data[column] = [value + 2 * group_index + time_increment for value in BASE_VALUES]
+    return pd.DataFrame(data)
 
 
 def group_values(frame: pd.DataFrame, columns: list[str]) -> list[float]:
@@ -126,19 +123,19 @@ def main() -> None:
             "plate_shape": None,
         }
         input_records.append(input_record(path.name, path.read_bytes(), parsed, float(time)))
-        expected_rows.append(expected_row(time, "Control", group_values(frame, ["1", "2"])))
-        expected_rows.append(expected_row(time, "Treated", group_values(frame, ["3", "4"])))
+        for column, group in COLUMN_GROUPS.items():
+            expected_rows.append(expected_row(time, group, group_values(frame, [column])))
 
     pd.DataFrame(expected_rows).to_csv(ROOT / "expected_group_results.csv", index=False, float_format="%.15g")
 
-    a = group_values(frames[0], ["1", "2"])
-    b = group_values(frames[20], ["3", "4"])
+    a = group_values(frames[0], ["1"])
+    b = group_values(frames[20], ["12"])
     welch = stats.ttest_ind(a, b, equal_var=False)
     pd.DataFrame(
         [{
             "group_a": "Control",
             "time_a_minutes": 0,
-            "group_b": "Treated",
+            "group_b": "Treatment_11",
             "time_b_minutes": 20,
             "n_a": len(a),
             "n_b": len(b),
@@ -151,9 +148,9 @@ def main() -> None:
     ).to_csv(ROOT / "expected_welch_comparison.csv", index=False, float_format="%.15g")
 
     plate_map = [
-        {"row_id": row, "column": column, "group": "Control" if column in ("1", "2") else "Treated"}
+        {"row_id": row, "column": column, "group": COLUMN_GROUPS[column]}
         for row in ROWS
-        for column in ("1", "2", "3", "4")
+        for column in COLUMNS
     ]
     pd.DataFrame(plate_map).to_csv(ROOT / "plate_map.csv", index=False)
 
@@ -161,17 +158,17 @@ def main() -> None:
     settings.update(
         agg_layout_mode="By plate groups (template)",
         selected_rows=ROWS,
-        selected_columns=["1", "2", "3", "4"],
+        selected_columns=COLUMNS,
         agg_name="Mean",
         outlier_method="None",
-        plot_columns=["Control", "Treated"],
+        plot_columns=GROUPS,
         error_method="95% CI",
         stat_time=10.0,
-        stat_metric="Treated",
+        stat_metric="Treatment_05",
         ttest_time_a=0.0,
         ttest_metric_a="Control",
         ttest_time_b=20.0,
-        ttest_metric_b="Treated",
+        ttest_metric_b="Treatment_11",
         pairwise_enabled=False,
         pairwise_groups=[],
     )

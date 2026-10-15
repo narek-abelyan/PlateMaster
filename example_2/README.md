@@ -4,12 +4,14 @@ This directory contains a small, entirely synthetic validation dataset with know
 
 ## Dataset
 
-The `data` directory contains exactly five Excel files for 0, 5, 10, 15 and 20 minutes. Each file has one worksheet named `Plate`, with the header in row 1 and a 4 × 4 measurement table. The last number in each filename is the time in minutes.
+The `data` directory contains exactly five Excel files for 0, 5, 10, 15 and 20 minutes. Each file has one worksheet named `Plate`, with the header in row 1 and a standard 8 × 12 (96-well) measurement table. The last number in each filename is the time in minutes.
 
-The 16 wells are assigned as follows:
+The plate contains 12 experimental groups, one group per column and eight replicate wells per group:
 
-- `Control`: columns 1 and 2, rows A–D (8 observations per time point);
-- `Treated`: columns 3 and 4, rows A–D (8 observations per time point).
+- `Control`: column 1, rows A–H;
+- `Treatment_01` to `Treatment_11`: columns 2–12 respectively, rows A–H.
+
+This assigns every well exactly once and gives each group 8 observations per time point.
 
 The same mapping is provided in `plate_map.csv`. The values are deterministic and contain no missing values or outliers.
 
@@ -21,8 +23,8 @@ The same mapping is provided in `plate_map.csv`. The values are deterministic an
 4. Upload `example_2/analysis_settings.json` under **Import analysis settings (.json)** and select **Apply imported settings**.
 5. Confirm that the layout is **By plate groups (template)**, aggregation is **Mean**, outlier filtering is **None**, and error bars are **95% CI**.
 6. Press **Run**.
-7. Compare the aggregated `Control` and `Treated` columns with `expected_group_results.csv`.
-8. Compare the configured Welch test (`Control` at 0 minutes versus `Treated` at 20 minutes) with `expected_welch_comparison.csv`.
+7. Compare the 12 aggregated group columns with `expected_group_results.csv`.
+8. Compare the configured Welch test (`Control` at 0 minutes versus `Treatment_11` at 20 minutes) with `expected_welch_comparison.csv`.
 
 The JSON records the five input-file hashes, plate map and complete analysis settings. A software-environment warning can appear when it is opened with a different PlateMaster or dependency version; this is provenance information and does not prevent applying the settings.
 
