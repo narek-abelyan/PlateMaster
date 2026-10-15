@@ -1014,6 +1014,7 @@ def run_dashboard() -> None:
             st.info("Saved input checksums, parsed data and numerical software versions match.")
 
 
+    plate_template_tools_slot = None
     with st.sidebar:
         st.header("2) Selection")
         layout_mode = st.selectbox(
@@ -1029,6 +1030,10 @@ def run_dashboard() -> None:
         agg_options = list(AGGREGATIONS.keys())
         agg_default_index = agg_options.index("Mean") if "Mean" in agg_options else 0
         agg_name = st.selectbox("Aggregation", options=agg_options, index=agg_default_index, key="agg_name")
+
+        if layout_mode == "By plate groups (template)":
+            st.subheader("Plate template file")
+            plate_template_tools_slot = st.container()
 
         st.subheader("Outlier filtering")
         outlier_method = st.selectbox("Method", options=["None", "IQR", "Z-score", "MAD"], index=0, key="outlier_method")
@@ -1089,12 +1094,9 @@ def run_dashboard() -> None:
             metric_labels = selected_rows
         elif layout_mode == "By plate groups (template)":
             st.header("Plate template grouping")
-            st.caption("Enter group names into cells, or reuse a CSV template with columns: row_id, column, group.")
-            template_upload_col, template_apply_col = st.columns([3, 1])
-            with template_upload_col:
+            st.caption("Edit group names in the grid. Upload, apply, and download controls are in the left sidebar.")
+            with plate_template_tools_slot:
                 st.file_uploader("Upload plate template (.csv)", type=["csv"], key="plate_template_upload")
-            with template_apply_col:
-                st.write("")
                 st.button(
                     "Apply plate template",
                     key="apply_plate_template",
@@ -1102,22 +1104,24 @@ def run_dashboard() -> None:
                     args=(selected_rows, selected_columns),
                     width="stretch",
                 )
-            if "_plate_template_error" in st.session_state:
-                st.error(st.session_state.pop("_plate_template_error"))
-            if "_plate_template_message" in st.session_state:
-                st.success(st.session_state.pop("_plate_template_message"))
+                if "_plate_template_error" in st.session_state:
+                    st.error(st.session_state.pop("_plate_template_error"))
+                if "_plate_template_message" in st.session_state:
+                    st.success(st.session_state.pop("_plate_template_message"))
 
             group_map = _edit_plate_groups(selected_rows, selected_columns)
             template_csv = _plate_template_csv(
                 selected_rows, selected_columns, st.session_state.get("_plate_groups", [])
             )
-            st.download_button(
-                "Download plate template.csv",
-                data=template_csv,
-                file_name="plate_master_template.csv",
-                mime="text/csv",
-            )
-            st.caption("The CSV contains every selected well. Blank group cells remain unassigned.")
+            with plate_template_tools_slot:
+                st.download_button(
+                    "Download plate template.csv",
+                    data=template_csv,
+                    file_name="plate_master_template.csv",
+                    mime="text/csv",
+                    width="stretch",
+                )
+                st.caption("CSV columns: row_id, column, group. Blank groups remain unassigned.")
 
             if not group_map:
                 st.warning("Please define at least one group in plate template")
