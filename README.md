@@ -411,7 +411,7 @@ README.md           # English and Russian documentation
 LICENSE             # Full MIT License text
 ```
 
-The Streamlit entry point remains `PlateMaster1.2.py`. Settings validation and provenance are kept in `analysis_settings.py`; this revision does not perform a full architectural refactor. The development version is identified as `1.3.0-dev` inside the app and exported settings.
+The Streamlit entry point remains `PlateMaster1.2.py`. Settings validation and provenance are kept in `analysis_settings.py`; this revision does not perform a full architectural refactor. The stable release is identified as `1.3.0` inside the app and exported settings. The immutable release page is [v1.3.0](https://github.com/narek-abelyan/PlateMaster/releases/tag/v1.3.0), and citation metadata are provided in [`CITATION.cff`](CITATION.cff).
 
 ### Run the regression checks
 
@@ -902,7 +902,7 @@ README.md           # English and Russian documentation
 LICENSE             # Full MIT License text
 ```
 
-Точка запуска остаётся `PlateMaster1.2.py`. Проверка настроек и сведения об анализе вынесены в `analysis_settings.py`; полного разделения архитектуры эта ревизия не выполняет. В приложении и настройках указана версия разработки `1.3.0-dev`.
+Точка запуска остаётся `PlateMaster1.2.py`. Проверка настроек и сведения об анализе вынесены в `analysis_settings.py`; полного разделения архитектуры эта ревизия не выполняет. В приложении и экспортируемых настройках указана стабильная версия `1.3.0`. Неизменяемая страница релиза: [v1.3.0](https://github.com/narek-abelyan/PlateMaster/releases/tag/v1.3.0); данные для цитирования находятся в [`CITATION.cff`](CITATION.cff).
 
 ### Запуск проверок
 

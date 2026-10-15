@@ -624,7 +624,7 @@
     "zscore_threshold": 3.0
   },
   "software": {
-    "application_version": "1.3.0-dev",
+    "application_version": "1.3.0",
     "dataset": "PlateMaster example_2 synthetic validation set",
     "license": "CC0-1.0",
     "reference_method": "Student-t intervals and SciPy Welch t-test"

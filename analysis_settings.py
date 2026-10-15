@@ -13,7 +13,7 @@ from typing import Any
 
 import pandas as pd
 
-APP_VERSION = "1.3.0-dev"
+APP_VERSION = "1.3.0"
 SCHEMA_VERSION = 1
 MAX_SETTINGS_BYTES = 2 * 1024 * 1024
 MAX_PAIRWISE_GROUPS = 20
