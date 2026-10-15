@@ -1023,6 +1023,9 @@ def run_dashboard() -> None:
             index=0,
             key="agg_layout_mode",
         )
+        if layout_mode == "By plate groups (template)":
+            st.subheader("Plate template file")
+            plate_template_tools_slot = st.container()
 
         selected_rows = st.multiselect("Rows", options=all_rows, default=all_rows if "selected_rows" not in st.session_state else None, key="selected_rows")
         selected_columns = st.multiselect("Columns", options=all_columns, default=all_columns if "selected_columns" not in st.session_state else None, key="selected_columns")
@@ -1030,10 +1033,6 @@ def run_dashboard() -> None:
         agg_options = list(AGGREGATIONS.keys())
         agg_default_index = agg_options.index("Mean") if "Mean" in agg_options else 0
         agg_name = st.selectbox("Aggregation", options=agg_options, index=agg_default_index, key="agg_name")
-
-        if layout_mode == "By plate groups (template)":
-            st.subheader("Plate template file")
-            plate_template_tools_slot = st.container()
 
         st.subheader("Outlier filtering")
         outlier_method = st.selectbox("Method", options=["None", "IQR", "Z-score", "MAD"], index=0, key="outlier_method")
